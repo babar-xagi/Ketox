@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use syn::{spanned::Spanned, visit::Visit};
 
 /// The metadata version understood by this release.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +36,7 @@ pub struct Parameter {
     pub ty: Type,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Type {
     Bool,
@@ -49,36 +49,82 @@ pub enum Type {
     String,
     Str,
     Unit,
+    ByteArray,
+    ByteSlice,
+    IntArray,
+    IntSlice,
+    LongArray,
+    LongSlice,
+    FloatArray,
+    FloatSlice,
+    DoubleArray,
+    DoubleSlice,
+    BooleanArray,
+    BooleanSlice,
+    Option(Box<Type>),
+    Result { ok: Box<Type>, err: String },
 }
 
 impl Type {
     /// The corresponding Kotlin type.
-    pub fn kotlin_type(self) -> &'static str {
+    pub fn kotlin_type(&self) -> String {
         match self {
-            Self::Bool => "Boolean",
-            Self::I8 => "Byte",
-            Self::I16 => "Short",
-            Self::I32 => "Int",
-            Self::I64 => "Long",
-            Self::F32 => "Float",
-            Self::F64 => "Double",
-            Self::String | Self::Str => "String",
-            Self::Unit => "Unit",
+            Self::Bool => "Boolean".to_owned(),
+            Self::I8 => "Byte".to_owned(),
+            Self::I16 => "Short".to_owned(),
+            Self::I32 => "Int".to_owned(),
+            Self::I64 => "Long".to_owned(),
+            Self::F32 => "Float".to_owned(),
+            Self::F64 => "Double".to_owned(),
+            Self::String | Self::Str => "String".to_owned(),
+            Self::Unit => "Unit".to_owned(),
+            Self::ByteArray | Self::ByteSlice => "ByteArray".to_owned(),
+            Self::IntArray | Self::IntSlice => "IntArray".to_owned(),
+            Self::LongArray | Self::LongSlice => "LongArray".to_owned(),
+            Self::FloatArray | Self::FloatSlice => "FloatArray".to_owned(),
+            Self::DoubleArray | Self::DoubleSlice => "DoubleArray".to_owned(),
+            Self::BooleanArray | Self::BooleanSlice => "BooleanArray".to_owned(),
+            Self::Option(inner) => format!("{}?", inner.kotlin_type()),
+            Self::Result { ok, .. } => ok.kotlin_type(),
         }
     }
 
     /// The JVM descriptor for this type. Unit is valid only as a return type.
-    pub fn jni_signature(self) -> &'static str {
+    pub fn jni_signature(&self) -> String {
         match self {
-            Self::Bool => "Z",
-            Self::I8 => "B",
-            Self::I16 => "S",
-            Self::I32 => "I",
-            Self::I64 => "J",
-            Self::F32 => "F",
-            Self::F64 => "D",
-            Self::String | Self::Str => "Ljava/lang/String;",
-            Self::Unit => "V",
+            Self::Bool => "Z".to_owned(),
+            Self::I8 => "B".to_owned(),
+            Self::I16 => "S".to_owned(),
+            Self::I32 => "I".to_owned(),
+            Self::I64 => "J".to_owned(),
+            Self::F32 => "F".to_owned(),
+            Self::F64 => "D".to_owned(),
+            Self::String | Self::Str => "Ljava/lang/String;".to_owned(),
+            Self::Unit => "V".to_owned(),
+            Self::ByteArray | Self::ByteSlice => "[B".to_owned(),
+            Self::IntArray | Self::IntSlice => "[I".to_owned(),
+            Self::LongArray | Self::LongSlice => "[J".to_owned(),
+            Self::FloatArray | Self::FloatSlice => "[F".to_owned(),
+            Self::DoubleArray | Self::DoubleSlice => "[D".to_owned(),
+            Self::BooleanArray | Self::BooleanSlice => "[Z".to_owned(),
+            Self::Option(inner) => match inner.as_ref() {
+                Self::Bool => "Ljava/lang/Boolean;".to_owned(),
+                Self::I8 => "Ljava/lang/Byte;".to_owned(),
+                Self::I16 => "Ljava/lang/Short;".to_owned(),
+                Self::I32 => "Ljava/lang/Integer;".to_owned(),
+                Self::I64 => "Ljava/lang/Long;".to_owned(),
+                Self::F32 => "Ljava/lang/Float;".to_owned(),
+                Self::F64 => "Ljava/lang/Double;".to_owned(),
+                Self::String | Self::Str => "Ljava/lang/String;".to_owned(),
+                Self::ByteArray | Self::ByteSlice => "[B".to_owned(),
+                Self::IntArray | Self::IntSlice => "[I".to_owned(),
+                Self::LongArray | Self::LongSlice => "[J".to_owned(),
+                Self::FloatArray | Self::FloatSlice => "[F".to_owned(),
+                Self::DoubleArray | Self::DoubleSlice => "[D".to_owned(),
+                Self::BooleanArray | Self::BooleanSlice => "[Z".to_owned(),
+                _ => "Ljava/lang/Object;".to_owned(),
+            },
+            Self::Result { ok, .. } => ok.jni_signature(),
         }
     }
 }
@@ -88,10 +134,10 @@ impl Function {
     pub fn jni_signature(&self) -> String {
         let mut signature = String::from("(");
         for parameter in &self.parameters {
-            signature.push_str(parameter.ty.jni_signature());
+            signature.push_str(&parameter.ty.jni_signature());
         }
         signature.push(')');
-        signature.push_str(self.return_type.jni_signature());
+        signature.push_str(&self.return_type.jni_signature());
         signature
     }
 }
@@ -257,45 +303,150 @@ pub fn parse_function(function: &syn::ItemFn) -> syn::Result<Function> {
     Ok(metadata)
 }
 
-fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
-    let parsed = match ty {
+fn primitive_name(ty: &syn::Type) -> Option<String> {
+    match ty {
         syn::Type::Path(path)
             if path.qself.is_none()
                 && path.path.leading_colon.is_none()
                 && path.path.segments.len() == 1
                 && matches!(path.path.segments[0].arguments, syn::PathArguments::None) =>
         {
-            match path.path.segments[0].ident.to_string().as_str() {
-                "bool" => Some(Type::Bool),
-                "i8" => Some(Type::I8),
-                "i16" => Some(Type::I16),
-                "i32" => Some(Type::I32),
-                "i64" => Some(Type::I64),
-                "f32" => Some(Type::F32),
-                "f64" => Some(Type::F64),
-                "String" => Some(Type::String),
-                _ => None,
+            Some(path.path.segments[0].ident.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
+    match ty {
+        syn::Type::Path(path)
+            if path.qself.is_none()
+                && path.path.leading_colon.is_none()
+                && path.path.segments.len() == 1 =>
+        {
+            let segment = &path.path.segments[0];
+            let ident_str = segment.ident.to_string();
+            match &segment.arguments {
+                syn::PathArguments::None => match ident_str.as_str() {
+                    "bool" => return Ok(Type::Bool),
+                    "i8" => return Ok(Type::I8),
+                    "i16" => return Ok(Type::I16),
+                    "i32" => return Ok(Type::I32),
+                    "i64" => return Ok(Type::I64),
+                    "f32" => return Ok(Type::F32),
+                    "f64" => return Ok(Type::F64),
+                    "String" => return Ok(Type::String),
+                    _ => {}
+                },
+                syn::PathArguments::AngleBracketed(args) => {
+                    if ident_str == "Option" && args.args.len() == 1 {
+                        if let syn::GenericArgument::Type(inner_ty) = &args.args[0] {
+                            let inner = parse_type(inner_ty, is_return)?;
+                            if inner == Type::Unit {
+                                return Err(syn::Error::new_spanned(
+                                    inner_ty,
+                                    "Option<()> is unsupported: use () directly",
+                                ));
+                            }
+                            if matches!(inner, Type::Option(_)) {
+                                return Err(syn::Error::new_spanned(
+                                    inner_ty,
+                                    "nested Option<Option<T>> is unsupported",
+                                ));
+                            }
+                            if matches!(inner, Type::Result { .. }) {
+                                return Err(syn::Error::new_spanned(
+                                    inner_ty,
+                                    "Option<Result<T, E>> is unsupported; use Result<Option<T>, E> instead",
+                                ));
+                            }
+                            return Ok(Type::Option(Box::new(inner)));
+                        }
+                    } else if ident_str == "Result" && args.args.len() == 2 {
+                        if !is_return {
+                            return Err(syn::Error::new_spanned(
+                                ty,
+                                "Result is only supported as a return type",
+                            ));
+                        }
+                        if let (
+                            syn::GenericArgument::Type(ok_ty),
+                            syn::GenericArgument::Type(err_ty),
+                        ) = (&args.args[0], &args.args[1])
+                        {
+                            let ok = parse_type(ok_ty, true)?;
+                            if matches!(ok, Type::Result { .. }) {
+                                return Err(syn::Error::new_spanned(
+                                    ok_ty,
+                                    "nested Result<Result<T, E>, E2> is unsupported",
+                                ));
+                            }
+                            let err_name = quote::quote!(#err_ty).to_string();
+                            return Ok(Type::Result {
+                                ok: Box::new(ok),
+                                err: err_name,
+                            });
+                        }
+                    } else if ident_str == "Vec" && args.args.len() == 1 {
+                        let name = match &args.args[0] {
+                            syn::GenericArgument::Type(elem_ty) => primitive_name(elem_ty),
+                            _ => None,
+                        };
+                        if let Some(name) = name {
+                            match name.as_str() {
+                                "u8" => return Ok(Type::ByteArray),
+                                "i32" => return Ok(Type::IntArray),
+                                "i64" => return Ok(Type::LongArray),
+                                "f32" => return Ok(Type::FloatArray),
+                                "f64" => return Ok(Type::DoubleArray),
+                                "bool" => return Ok(Type::BooleanArray),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         syn::Type::Reference(reference)
-            if !is_return && reference.mutability.is_none() && reference.lifetime.is_none() =>
+            if reference.mutability.is_none() && reference.lifetime.is_none() =>
         {
+            if is_return {
+                return Err(syn::Error::new_spanned(
+                    ty,
+                    "borrowed returns are unsupported: return an owned type instead",
+                ));
+            }
             match reference.elem.as_ref() {
                 syn::Type::Path(path) if path.qself.is_none() && path.path.is_ident("str") => {
-                    Some(Type::Str)
+                    return Ok(Type::Str);
                 }
-                _ => None,
+                syn::Type::Slice(slice) => {
+                    if let Some(name) = primitive_name(slice.elem.as_ref()) {
+                        match name.as_str() {
+                            "u8" => return Ok(Type::ByteSlice),
+                            "i32" => return Ok(Type::IntSlice),
+                            "i64" => return Ok(Type::LongSlice),
+                            "f32" => return Ok(Type::FloatSlice),
+                            "f64" => return Ok(Type::DoubleSlice),
+                            "bool" => return Ok(Type::BooleanSlice),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
             }
         }
-        syn::Type::Tuple(tuple) if is_return && tuple.elems.is_empty() => Some(Type::Unit),
-        _ => None,
-    };
-    parsed.ok_or_else(|| syn::Error::new_spanned(
+        syn::Type::Tuple(tuple) if is_return && tuple.elems.is_empty() => return Ok(Type::Unit),
+        _ => {}
+    }
+
+    Err(syn::Error::new_spanned(
         ty,
         if is_return {
-            "unsupported export return type: use bool, i8/i16/i32/i64, f32/f64, String, or ()"
+            "unsupported export return type: use bool, i8/i16/i32/i64, f32/f64, String, Vec<u8/i32/i64/f32/f64/bool>, Option<T>, Result<T, E>, or ()"
         } else {
-            "unsupported export parameter type: use bool, i8/i16/i32/i64, f32/f64, String, or &str with an elided lifetime"
+            "unsupported export parameter type: use bool, i8/i16/i32/i64, f32/f64, String, &str, Vec/&[u8/i32/i64/f32/f64/bool], or Option<T>"
         },
     ))
 }
@@ -375,9 +526,9 @@ pub fn parse_source(
 ///
 /// Unlike source discovery, this does not reorder functions or modify metadata.
 pub fn validate_module(module: &Module) -> Result<(), String> {
-    if module.schema_version != SCHEMA_VERSION {
+    if module.schema_version != 1 && module.schema_version != SCHEMA_VERSION {
         return Err(format!(
-            "unsupported metadata schema version {}; expected {SCHEMA_VERSION}",
+            "unsupported metadata schema version {}; expected 1 or {SCHEMA_VERSION}",
             module.schema_version
         ));
     }
@@ -424,20 +575,63 @@ fn validate_function(function: &Function) -> Result<(), String> {
                 parameter.name, function.rust_name
             ));
         }
-        if parameter.ty == Type::Unit {
-            return Err(format!(
-                "unit parameters are unsupported in `{}`",
-                function.rust_name
-            ));
-        }
+        validate_type_position(&parameter.ty, false, &function.rust_name)?;
     }
-    if function.return_type == Type::Str {
-        return Err(format!(
-            "borrowed string returns are unsupported in `{}`; return String instead",
-            function.rust_name
-        ));
-    }
+    validate_type_position(&function.return_type, true, &function.rust_name)?;
     Ok(())
+}
+
+fn validate_type_position(ty: &Type, is_return: bool, func_name: &str) -> Result<(), String> {
+    match ty {
+        Type::Unit if !is_return => {
+            Err(format!("unit parameters are unsupported in `{func_name}`"))
+        }
+        Type::Str if is_return => Err(format!(
+            "borrowed string returns are unsupported in `{func_name}`; return String instead"
+        )),
+        Type::ByteSlice
+        | Type::IntSlice
+        | Type::LongSlice
+        | Type::FloatSlice
+        | Type::DoubleSlice
+        | Type::BooleanSlice
+            if is_return =>
+        {
+            Err(format!(
+                "borrowed slice returns are unsupported in `{func_name}`; return Vec instead"
+            ))
+        }
+        Type::Option(inner) => {
+            if **inner == Type::Unit {
+                return Err(format!("Option<Unit> is unsupported in `{func_name}`"));
+            }
+            if matches!(**inner, Type::Option(_)) {
+                return Err(format!(
+                    "nested Option<Option<T>> is unsupported in `{func_name}`"
+                ));
+            }
+            if matches!(**inner, Type::Result { .. }) {
+                return Err(format!(
+                    "Option<Result<T, E>> is unsupported in `{func_name}`"
+                ));
+            }
+            validate_type_position(inner, is_return, func_name)
+        }
+        Type::Result { ok, .. } => {
+            if !is_return {
+                return Err(format!(
+                    "Result is only supported as a return type in `{func_name}`"
+                ));
+            }
+            if matches!(**ok, Type::Result { .. }) {
+                return Err(format!(
+                    "nested Result<Result<T, E>, E2> is unsupported in `{func_name}`"
+                ));
+            }
+            validate_type_position(ok, is_return, func_name)
+        }
+        _ => Ok(()),
+    }
 }
 
 fn kotlin_function_name(rust_name: &str) -> Result<String, String> {

@@ -53,6 +53,49 @@ pub fn fail() -> i32 {
     panic!("intentional smoke-test panic")
 }
 
+#[kotlin_export]
+pub fn find_user(id: i32) -> Option<String> {
+    if id == 42 {
+        Some("Alice".to_owned())
+    } else {
+        None
+    }
+}
+
+#[kotlin_export]
+pub fn greet_opt(name: Option<String>) -> String {
+    format!("Hello, {}!", name.unwrap_or_else(|| "stranger".to_owned()))
+}
+
+#[kotlin_export]
+pub fn divide(a: i32, b: i32) -> Result<i32, String> {
+    if b == 0 {
+        Err("division by zero".to_owned())
+    } else {
+        Ok(a / b)
+    }
+}
+
+#[kotlin_export]
+pub fn process_bytes(data: &[u8]) -> Vec<u8> {
+    data.iter().map(|b| b ^ 0x5a).collect()
+}
+
+#[kotlin_export]
+pub fn sum_numbers(numbers: &[i32]) -> i64 {
+    numbers.iter().map(|&x| x as i64).sum()
+}
+
+#[kotlin_export]
+pub fn opt_add(a: Option<i32>, b: Option<i32>) -> Option<i32> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x + y),
+        (Some(x), None) => Some(x),
+        (None, Some(y)) => Some(y),
+        (None, None) => None,
+    }
+}
+
 include!(concat!(env!("OUT_DIR"), "/ketox_jni.rs"));
 
 #[cfg(test)]

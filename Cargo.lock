@@ -140,6 +140,7 @@ dependencies = [
 name = "ketox-core"
 version = "0.0.1"
 dependencies = [
+ "quote",
  "serde",
  "serde_json",
  "syn 2.0.119",

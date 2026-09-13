@@ -74,7 +74,27 @@ fn default_return_is_unit_and_contextual_kotlin_names_are_valid() {
 #[test]
 fn accepts_each_supported_owned_return() {
     for ty in [
-        "bool", "i8", "i16", "i32", "i64", "f32", "f64", "String", "()",
+        "bool",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "f32",
+        "f64",
+        "String",
+        "()",
+        "Vec<u8>",
+        "Vec<i32>",
+        "Vec<i64>",
+        "Vec<f32>",
+        "Vec<f64>",
+        "Vec<bool>",
+        "Option<String>",
+        "Option<i32>",
+        "Option<Vec<u8>>",
+        "Result<i32, String>",
+        "Result<(), String>",
+        "Result<Option<String>, String>",
     ] {
         source(&format!(
             "#[kotlin_export] pub fn answer() -> {ty} {{ todo!() }}"
@@ -86,7 +106,6 @@ fn accepts_each_supported_owned_return() {
 #[test]
 fn rejects_unsupported_types_and_invalid_reference_lifetimes() {
     for ty in [
-        "u8",
         "u16",
         "u32",
         "u64",
@@ -94,18 +113,20 @@ fn rejects_unsupported_types_and_invalid_reference_lifetimes() {
         "isize",
         "i128",
         "char",
-        "Vec<i32>",
-        "Option<i32>",
         "std::string::String",
         "&String",
         "&i32",
         "&mut str",
         "&'static str",
+        "&'static [u8]",
         "()",
         "[i32; 2]",
         "(i32, i32)",
         "*const i32",
         "impl Copy",
+        "Result<i32, String>",
+        "Option<()>",
+        "Option<Option<i32>>",
     ] {
         let result = source(&format!("#[kotlin_export] pub fn accept(value: {ty}) {{}}"));
         assert!(result.is_err(), "accepted unsupported input {ty}");
@@ -113,10 +134,12 @@ fn rejects_unsupported_types_and_invalid_reference_lifetimes() {
     for ty in [
         "&str",
         "&'static str",
+        "&[u8]",
+        "&[i32]",
         "u32",
-        "Result<i32, String>",
         "!",
-        "Vec<i32>",
+        "Option<&str>",
+        "Result<&str, String>",
     ] {
         assert!(
             source(&format!(

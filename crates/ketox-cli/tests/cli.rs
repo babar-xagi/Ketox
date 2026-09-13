@@ -98,7 +98,7 @@ fn generate_and_inspect_agree_and_repeat_generation_is_identical() {
 
 #[test]
 fn invalid_source_does_not_create_output() {
-    let fixture = Fixture::new("#[kotlin_export] pub fn invalid(value: Vec<i32>) {}");
+    let fixture = Fixture::new("#[kotlin_export] pub fn invalid(value: usize) {}");
     let output_directory = fixture.directory.join("generated");
     let output = fixture
         .command("generate")

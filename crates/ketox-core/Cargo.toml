@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "Shared metadata and validation for Ketox Rust-to-Kotlin bindings"
 
 [dependencies]
+quote.workspace = true
 serde.workspace = true
 syn.workspace = true
 

@@ -150,7 +150,8 @@ fn generate_rust(module: &Module) -> String {
             )
             .unwrap();
         }
-        if function.return_type == Type::Unit {
+        let unit_return = is_unit(&function.return_type);
+        if unit_return {
             writeln!(output, ") {{").unwrap();
         } else {
             writeln!(
@@ -169,22 +170,12 @@ fn generate_rust(module: &Module) -> String {
         let mut arguments = Vec::with_capacity(function.parameters.len());
         for (index, parameter) in function.parameters.iter().enumerate() {
             let argument = format!("__ketox_arg_{index}");
-            arguments.push(match parameter.ty {
-                Type::String | Type::Str => {
-                    writeln!(
-                        output,
-                        "        let __ketox_value_{index} = ::ketox::runtime::read_string(__ketox_env, &{argument})?;"
-                    )
-                    .unwrap();
-                    if parameter.ty == Type::Str {
-                        format!("__ketox_value_{index}.as_str()")
-                    } else {
-                        format!("__ketox_value_{index}")
-                    }
-                }
-                Type::Bool => format!("{argument} != 0"),
-                _ => argument,
-            });
+            arguments.push(generate_argument_conversion(
+                &parameter.ty,
+                index,
+                &argument,
+                &mut output,
+            ));
         }
         let result_binding = if function.return_type == Type::Unit {
             ""
@@ -198,16 +189,397 @@ fn generate_rust(module: &Module) -> String {
             arguments.join(", ")
         )
         .unwrap();
-        match function.return_type {
-            Type::String | Type::Str => output
-                .push_str("        ::ketox::runtime::write_string(__ketox_env, __ketox_result)\n"),
-            Type::Bool => output.push_str("        Ok(if __ketox_result { 1 } else { 0 })\n"),
-            Type::Unit => output.push_str("        Ok(())\n"),
-            _ => output.push_str("        Ok(__ketox_result)\n"),
-        }
+        let ret_code = generate_return_conversion(&function.return_type, "__ketox_result");
+        writeln!(output, "        {ret_code}").unwrap();
         output.push_str("    })\n}\n");
     }
     output
+}
+
+fn is_unit(ty: &Type) -> bool {
+    match ty {
+        Type::Unit => true,
+        Type::Result { ok, .. } => is_unit(ok),
+        _ => false,
+    }
+}
+
+fn generate_argument_conversion(
+    ty: &Type,
+    index: usize,
+    argument: &str,
+    output: &mut String,
+) -> String {
+    match ty {
+        Type::Bool => format!("{argument} != 0"),
+        Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::F32 | Type::F64 => argument.to_owned(),
+        Type::String => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_string(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
+        Type::Str => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_string(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}.as_str()")
+        }
+        Type::ByteArray => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_byte_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
+        Type::ByteSlice => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_byte_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}.as_slice()")
+        }
+        Type::IntArray => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_int_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
+        Type::IntSlice => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_int_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}.as_slice()")
+        }
+        Type::LongArray => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_long_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
+        Type::LongSlice => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_long_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}.as_slice()")
+        }
+        Type::FloatArray => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_float_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
+        Type::FloatSlice => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_float_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}.as_slice()")
+        }
+        Type::DoubleArray => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_double_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
+        Type::DoubleSlice => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_double_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}.as_slice()")
+        }
+        Type::BooleanArray => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_boolean_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
+        Type::BooleanSlice => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_boolean_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}.as_slice()")
+        }
+        Type::Option(inner) => match inner.as_ref() {
+            Type::String => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_string(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::Str => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_string(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}.as_deref()")
+            }
+            Type::Bool => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_bool(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::I8 => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_byte(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::I16 => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_short(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::I32 => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_int(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::I64 => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_long(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::F32 => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_float(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::F64 => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_double(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::ByteArray => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_byte_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::ByteSlice => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_byte_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}.as_deref()")
+            }
+            Type::IntArray => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_int_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::IntSlice => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_int_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}.as_deref()")
+            }
+            Type::LongArray => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_long_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::LongSlice => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_long_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}.as_deref()")
+            }
+            Type::FloatArray => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_float_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::FloatSlice => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_float_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}.as_deref()")
+            }
+            Type::DoubleArray => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_double_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::DoubleSlice => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_double_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}.as_deref()")
+            }
+            Type::BooleanArray => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_boolean_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::BooleanSlice => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_boolean_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}.as_deref()")
+            }
+            _ => argument.to_owned(),
+        },
+        Type::Unit | Type::Result { .. } => argument.to_owned(),
+    }
+}
+
+fn generate_return_conversion(ty: &Type, expr: &str) -> String {
+    match ty {
+        Type::Unit => "Ok(())".to_owned(),
+        Type::Bool => format!("Ok(if {expr} {{ 1 }} else {{ 0 }})"),
+        Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::F32 | Type::F64 => {
+            format!("Ok({expr})")
+        }
+        Type::String | Type::Str => {
+            format!("::ketox::runtime::write_string(__ketox_env, {expr})")
+        }
+        Type::ByteArray | Type::ByteSlice => {
+            format!("::ketox::runtime::write_byte_array(__ketox_env, &{expr})")
+        }
+        Type::IntArray | Type::IntSlice => {
+            format!("::ketox::runtime::write_int_array(__ketox_env, &{expr})")
+        }
+        Type::LongArray | Type::LongSlice => {
+            format!("::ketox::runtime::write_long_array(__ketox_env, &{expr})")
+        }
+        Type::FloatArray | Type::FloatSlice => {
+            format!("::ketox::runtime::write_float_array(__ketox_env, &{expr})")
+        }
+        Type::DoubleArray | Type::DoubleSlice => {
+            format!("::ketox::runtime::write_double_array(__ketox_env, &{expr})")
+        }
+        Type::BooleanArray | Type::BooleanSlice => {
+            format!("::ketox::runtime::write_boolean_array(__ketox_env, &{expr})")
+        }
+        Type::Option(inner) => match inner.as_ref() {
+            Type::String | Type::Str => {
+                format!("::ketox::runtime::write_opt_string(__ketox_env, {expr})")
+            }
+            Type::Bool => {
+                format!("::ketox::runtime::write_opt_bool(__ketox_env, {expr})")
+            }
+            Type::I8 => {
+                format!("::ketox::runtime::write_opt_byte(__ketox_env, {expr})")
+            }
+            Type::I16 => {
+                format!("::ketox::runtime::write_opt_short(__ketox_env, {expr})")
+            }
+            Type::I32 => {
+                format!("::ketox::runtime::write_opt_int(__ketox_env, {expr})")
+            }
+            Type::I64 => {
+                format!("::ketox::runtime::write_opt_long(__ketox_env, {expr})")
+            }
+            Type::F32 => {
+                format!("::ketox::runtime::write_opt_float(__ketox_env, {expr})")
+            }
+            Type::F64 => {
+                format!("::ketox::runtime::write_opt_double(__ketox_env, {expr})")
+            }
+            Type::ByteArray | Type::ByteSlice => {
+                format!("::ketox::runtime::write_opt_byte_array(__ketox_env, {expr})")
+            }
+            Type::IntArray | Type::IntSlice => {
+                format!("::ketox::runtime::write_opt_int_array(__ketox_env, {expr})")
+            }
+            Type::LongArray | Type::LongSlice => {
+                format!("::ketox::runtime::write_opt_long_array(__ketox_env, {expr})")
+            }
+            Type::FloatArray | Type::FloatSlice => {
+                format!("::ketox::runtime::write_opt_float_array(__ketox_env, {expr})")
+            }
+            Type::DoubleArray | Type::DoubleSlice => {
+                format!("::ketox::runtime::write_opt_double_array(__ketox_env, {expr})")
+            }
+            Type::BooleanArray | Type::BooleanSlice => {
+                format!("::ketox::runtime::write_opt_boolean_array(__ketox_env, {expr})")
+            }
+            _ => format!("Ok({expr})"),
+        },
+        Type::Result { ok, .. } => {
+            let ok_conv = generate_return_conversion(ok, "__ketox_ok");
+            format!(
+                "match {expr} {{\n            Ok(__ketox_ok) => {ok_conv},\n            Err(__ketox_err) => Err(::ketox::runtime::BridgeError::user_error(__ketox_err.to_string())),\n        }}"
+            )
+        }
+    }
 }
 
 fn jni_rust_type(ty: &Type, input: bool) -> &'static str {
@@ -221,6 +593,53 @@ fn jni_rust_type(ty: &Type, input: bool) -> &'static str {
         Type::F64 => "::ketox::jni::sys::jdouble",
         Type::String | Type::Str if input => "::ketox::jni::objects::JString<'local>",
         Type::String | Type::Str => "::ketox::jni::sys::jstring",
+        Type::ByteArray | Type::ByteSlice if input => "::ketox::jni::objects::JByteArray<'local>",
+        Type::ByteArray | Type::ByteSlice => "::ketox::jni::sys::jbyteArray",
+        Type::IntArray | Type::IntSlice if input => "::ketox::jni::objects::JIntArray<'local>",
+        Type::IntArray | Type::IntSlice => "::ketox::jni::sys::jintArray",
+        Type::LongArray | Type::LongSlice if input => "::ketox::jni::objects::JLongArray<'local>",
+        Type::LongArray | Type::LongSlice => "::ketox::jni::sys::jlongArray",
+        Type::FloatArray | Type::FloatSlice if input => {
+            "::ketox::jni::objects::JFloatArray<'local>"
+        }
+        Type::FloatArray | Type::FloatSlice => "::ketox::jni::sys::jfloatArray",
+        Type::DoubleArray | Type::DoubleSlice if input => {
+            "::ketox::jni::objects::JDoubleArray<'local>"
+        }
+        Type::DoubleArray | Type::DoubleSlice => "::ketox::jni::sys::jdoubleArray",
+        Type::BooleanArray | Type::BooleanSlice if input => {
+            "::ketox::jni::objects::JBooleanArray<'local>"
+        }
+        Type::BooleanArray | Type::BooleanSlice => "::ketox::jni::sys::jbooleanArray",
+        Type::Option(inner) => match inner.as_ref() {
+            Type::String | Type::Str if input => "::ketox::jni::objects::JString<'local>",
+            Type::String | Type::Str => "::ketox::jni::sys::jstring",
+            Type::ByteArray | Type::ByteSlice if input => {
+                "::ketox::jni::objects::JByteArray<'local>"
+            }
+            Type::ByteArray | Type::ByteSlice => "::ketox::jni::sys::jbyteArray",
+            Type::IntArray | Type::IntSlice if input => "::ketox::jni::objects::JIntArray<'local>",
+            Type::IntArray | Type::IntSlice => "::ketox::jni::sys::jintArray",
+            Type::LongArray | Type::LongSlice if input => {
+                "::ketox::jni::objects::JLongArray<'local>"
+            }
+            Type::LongArray | Type::LongSlice => "::ketox::jni::sys::jlongArray",
+            Type::FloatArray | Type::FloatSlice if input => {
+                "::ketox::jni::objects::JFloatArray<'local>"
+            }
+            Type::FloatArray | Type::FloatSlice => "::ketox::jni::sys::jfloatArray",
+            Type::DoubleArray | Type::DoubleSlice if input => {
+                "::ketox::jni::objects::JDoubleArray<'local>"
+            }
+            Type::DoubleArray | Type::DoubleSlice => "::ketox::jni::sys::jdoubleArray",
+            Type::BooleanArray | Type::BooleanSlice if input => {
+                "::ketox::jni::objects::JBooleanArray<'local>"
+            }
+            Type::BooleanArray | Type::BooleanSlice => "::ketox::jni::sys::jbooleanArray",
+            _ if input => "::ketox::jni::objects::JObject<'local>",
+            _ => "::ketox::jni::sys::jobject",
+        },
+        Type::Result { ok, .. } => jni_rust_type(ok, false),
         Type::Unit => "()",
     }
 }
@@ -228,8 +647,22 @@ fn jni_rust_type(ty: &Type, input: bool) -> &'static str {
 fn jni_default(ty: &Type) -> &'static str {
     match ty {
         Type::String | Type::Str => "::std::ptr::null_mut()",
+        Type::ByteArray
+        | Type::ByteSlice
+        | Type::IntArray
+        | Type::IntSlice
+        | Type::LongArray
+        | Type::LongSlice
+        | Type::FloatArray
+        | Type::FloatSlice
+        | Type::DoubleArray
+        | Type::DoubleSlice
+        | Type::BooleanArray
+        | Type::BooleanSlice
+        | Type::Option(_) => "::std::ptr::null_mut()",
         Type::F32 | Type::F64 => "0.0",
         Type::Unit => "()",
+        Type::Result { ok, .. } => jni_default(ok),
         _ => "0",
     }
 }
@@ -398,6 +831,54 @@ mod tests {
             generated
                 .kotlin
                 .contains("error: java.lang.UnsatisfiedLinkError")
+        );
+    }
+
+    #[test]
+    fn generates_phase_two_types_and_valid_rust_syntax() {
+        let module = module(
+            r#"
+            #[kotlin_export] pub fn find_user(id: i32) -> Option<String> { None }
+            #[kotlin_export] pub fn greet_opt(name: Option<String>) -> String { String::new() }
+            #[kotlin_export] pub fn divide(a: i32, b: i32) -> Result<i32, String> { Ok(a / b) }
+            #[kotlin_export] pub fn process_bytes(data: &[u8]) -> Vec<u8> { data.to_vec() }
+            #[kotlin_export] pub fn sum_numbers(numbers: &[i32]) -> i64 { 0 }
+            #[kotlin_export] pub fn opt_add(a: Option<i32>, b: Option<i32>) -> Option<i32> { None }
+            "#,
+        );
+        let generated = generate(&module).unwrap();
+        syn::parse_file(&generated.rust).expect("generated JNI glue should be valid Rust");
+        for declaration in [
+            "external fun findUser(id: kotlin.Int): kotlin.String?",
+            "external fun greetOpt(name: kotlin.String?): kotlin.String",
+            "external fun divide(a: kotlin.Int, b: kotlin.Int): kotlin.Int",
+            "external fun processBytes(data: kotlin.ByteArray): kotlin.ByteArray",
+            "external fun sumNumbers(numbers: kotlin.IntArray): kotlin.Long",
+            "external fun optAdd(a: kotlin.Int?, b: kotlin.Int?): kotlin.Int?",
+        ] {
+            assert!(
+                generated.kotlin.contains(declaration),
+                "missing {declaration}"
+            );
+        }
+        assert!(generated.rust.contains("::ketox::runtime::read_byte_vec"));
+        assert!(
+            generated
+                .rust
+                .contains("::ketox::runtime::write_byte_array")
+        );
+        assert!(generated.rust.contains("::ketox::runtime::read_opt_string"));
+        assert!(
+            generated
+                .rust
+                .contains("::ketox::runtime::write_opt_string")
+        );
+        assert!(generated.rust.contains("::ketox::runtime::read_opt_int"));
+        assert!(generated.rust.contains("::ketox::runtime::write_opt_int"));
+        assert!(
+            generated
+                .rust
+                .contains("::ketox::runtime::BridgeError::user_error")
         );
     }
 }

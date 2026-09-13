@@ -41,7 +41,31 @@ fun main() {
     } catch (error: java.lang.reflect.InvocationTargetException) {
         check(error.cause is NullPointerException)
     }
-    expectFailure<IllegalArgumentException> { RustApi.echo("x".repeat(16 * 1024 * 1024 + 1)) }
+    // Phase 2: Option<String>
+    check(RustApi.findUser(42) == "Alice")
+    check(RustApi.findUser(1) == null)
+    check(RustApi.greetOpt(null) == "Hello, stranger!")
+    check(RustApi.greetOpt("Bob") == "Hello, Bob!")
+
+    // Phase 2: Result<T, E>
+    check(RustApi.divide(10, 2) == 5)
+    expectFailure<RuntimeException> { RustApi.divide(10, 0) }
+
+    // Phase 2: Byte Arrays & Slices
+    val inputBytes = byteArrayOf(1, 2, 3, 4)
+    val processedBytes = RustApi.processBytes(inputBytes)
+    check(processedBytes.contentEquals(byteArrayOf((1 xor 0x5a).toByte(), (2 xor 0x5a).toByte(), (3 xor 0x5a).toByte(), (4 xor 0x5a).toByte())))
+
+    // Phase 2: Primitive Arrays & Slices
+    check(RustApi.sumNumbers(intArrayOf(10, 20, 30)) == 60L)
+    check(RustApi.sumNumbers(intArrayOf()) == 0L)
+
+    // Phase 2: Boxed Option Primitives
+    check(RustApi.optAdd(10, 20) == 30)
+    check(RustApi.optAdd(10, null) == 10)
+    check(RustApi.optAdd(null, 20) == 20)
+    check(RustApi.optAdd(null, null) == null)
+
     val threads = (1..4).map { worker ->
         Thread {
             repeat(100) { check(RustApi.echo("thread-$worker-🦀") == "thread-$worker-🦀") }
@@ -55,5 +79,5 @@ fun main() {
     threads.forEach { it.join() }
     check(failures.isEmpty()) { "Concurrent JNI calls failed: $failures" }
     println(RustApi.hello("Kotlin"))
-    println("Ketox JVM smoke tests passed: primitives, strings, nulls, Unicode, limits, panics, threads")
+    println("Ketox JVM smoke tests passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays")
 }

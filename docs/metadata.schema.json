@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Ketox module metadata version 1",
-  "description": "Structural schema. ketox-core additionally validates reserved names, derived Kotlin names, and function/parameter name uniqueness.",
+  "title": "Ketox module metadata schema",
+  "description": "Structural schema for Ketox metadata versions 1 and 2. ketox-core additionally validates reserved names, derived Kotlin names, and function/parameter name uniqueness.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "package", "class_name", "library_name", "functions"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "enum": [1, 2] },
     "package": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
     "class_name": { "$ref": "#/$defs/identifier" },
     "library_name": { "$ref": "#/$defs/identifier" },
@@ -20,7 +20,7 @@
       "required": ["name", "ty"],
       "properties": {
         "name": { "$ref": "#/$defs/identifier" },
-        "ty": { "enum": ["bool", "i8", "i16", "i32", "i64", "f32", "f64", "string", "str"] }
+        "ty": { "$ref": "#/$defs/type" }
       }
     },
     "function": {
@@ -31,8 +31,43 @@
         "rust_name": { "$ref": "#/$defs/identifier" },
         "kotlin_name": { "$ref": "#/$defs/identifier" },
         "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
-        "return_type": { "enum": ["bool", "i8", "i16", "i32", "i64", "f32", "f64", "string", "unit"] }
+        "return_type": { "$ref": "#/$defs/type" }
       }
+    },
+    "type": {
+      "oneOf": [
+        {
+          "enum": [
+            "bool", "i8", "i16", "i32", "i64", "f32", "f64", "string", "str", "unit",
+            "byte_array", "byte_slice", "int_array", "int_slice", "long_array", "long_slice",
+            "float_array", "float_slice", "double_array", "double_slice", "boolean_array", "boolean_slice"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["option"],
+          "properties": {
+            "option": { "$ref": "#/$defs/type" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["result"],
+          "properties": {
+            "result": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ok", "err"],
+              "properties": {
+                "ok": { "$ref": "#/$defs/type" },
+                "err": { "type": "string" }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

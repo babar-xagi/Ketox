@@ -106,11 +106,19 @@ Both commands require the source, package, object name (`--class`), and library 
 
 ## Current boundaries
 
-Exports must be public, safe, synchronous, non-generic functions declared directly in the source file passed to codegen. Supported values are `bool`, signed fixed-width integers, floating-point values, and `String`; `&str` is accepted as an input and `()` as a return. Rust snake_case function names become Kotlin lowerCamelCase names. Unsupported declarations and naming collisions produce diagnostics.
+Exports must be public, safe, synchronous, non-generic functions declared directly in the source file passed to codegen. Supported values are:
+- Primitives: `bool`, signed fixed-width integers (`i8`, `i16`, `i32`, `i64`), and floating-point values (`f32`, `f64`)
+- Strings: `String`, and borrowed `&str` inputs
+- Unit: `()` as a return type
+- Nullability: `Option<T>` for parameters and returns, mapped to Kotlin `T?` (with boxed primitives or nullable references)
+- Errors: `Result<T, E>` returns, returning `T` directly to Kotlin and converting `Err` to JVM `RuntimeException`
+- Arrays: Byte arrays (`Vec<u8>`, `&[u8]`) mapped to Kotlin `ByteArray`, and primitive arrays (`IntArray`, `LongArray`, `FloatArray`, `DoubleArray`, `BooleanArray`) for `Vec<T>` and `&[T]`
 
-Strings are copied across the boundary. Null inputs and malformed UTF-16 are rejected. Rust panics are caught and reported as JVM exceptions when compiled with `panic = "unwind"`. See the [type contract](docs/type-system.md) and [ownership and error contract](docs/ownership.md) for exact limits.
+Rust snake_case function names become Kotlin lowerCamelCase names. Unsupported declarations and naming collisions produce diagnostics.
 
-`Option`, `Result`, collections, exported classes, native handles, callbacks, async functions, Android packaging, Gradle integration, and Kotlin/Native are planned and are not implemented.
+Strings and arrays are copied across the boundary. Null inputs on non-optional types and malformed UTF-16 are rejected. Rust panics are caught and reported as JVM exceptions when compiled with `panic = "unwind"`. See the [type contract](docs/type-system.md) and [ownership and error contract](docs/ownership.md) for exact limits.
+
+Exported classes, native handles, callbacks, async functions, Android packaging, Gradle integration, and Kotlin/Native are planned for subsequent phases.
 
 ## Repository
 
