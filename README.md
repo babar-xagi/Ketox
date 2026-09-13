@@ -2,21 +2,48 @@
 
 ketox3 generates Kotlin/JVM bindings for Rust libraries. Its goal is to make Rust functions and data structures feel natural, ergonomic, and safe to call from Kotlin through annotations and generated JNI glue.
 
-This repository contains **ketox3** with completed Phase 1 (Functions), Phase 2 (Rich Types, Option, Result, and Arrays), and Phase 3 (Rust Structs ↔ Kotlin Classes, Handle Registry, and Object Lifecycle). The [full project design](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) describes the longer-term vision; [ROADMAP.md](ROADMAP.md) tracks milestones and implementation progress.
+This repository contains **ketox3** with completed:
+- **Phase 1**: Functions and primitive/string conversions
+- **Phase 2**: Rich types, `Option<T>`, `Result<T, E>`, and primitive array slices
+- **Phase 3**: Rust Structs ↔ Kotlin Classes, thread-safe Handle Registry, and AutoCloseable object lifecycle
+- **Phase 4**: Enums, Sealed Classes / ADTs, Pass-by-Value Data Models, and String Collections
+
+The [full project design](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) describes the long-term vision; [ROADMAP.md](ROADMAP.md) tracks milestones and implementation progress.
 
 ```rust
-use ketox::{kotlin_class, kotlin_constructor, kotlin_export};
+use ketox::{kotlin_class, kotlin_constructor, kotlin_enum, kotlin_export, kotlin_model};
 
+// Top-level exported functions
 #[kotlin_export]
 pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
 
-#[kotlin_export]
-pub fn hello(name: String) -> String {
-    format!("Hello, {name}!")
+// Simple C-like fieldless enum -> Kotlin enum class
+#[kotlin_enum]
+pub enum Status {
+    Idle,
+    Running,
+    Completed,
 }
 
+// Data-bearing ADT enum -> Kotlin sealed class with data class / object variants
+#[kotlin_enum]
+pub enum Shape {
+    Circle(f64),
+    Rectangle { w: f64, h: f64 },
+    Point,
+}
+
+// Pass-by-value data model -> Kotlin data class
+#[kotlin_model]
+pub struct UserProfile {
+    pub id: i64,
+    pub username: String,
+    pub status: Status,
+}
+
+// Stateful class with lifecycle -> Kotlin class implementing AutoCloseable
 #[kotlin_class]
 pub struct Vector {
     x: f64,
@@ -43,18 +70,44 @@ impl Vector {
         self.x * other.x + self.y * other.y
     }
 }
+
+// Rich collections -> Kotlin Array<String>
+#[kotlin_export]
+pub fn filter_names(names: &[String], prefix: &str) -> Vec<String> {
+    names.iter().filter(|n| n.starts_with(prefix)).cloned().collect()
+}
 ```
 
 The generated Kotlin bindings provide:
 
 ```kotlin
 import dev.ketox.example.RustApi
+import dev.ketox.example.Status
+import dev.ketox.example.Shape
+import dev.ketox.example.UserProfile
 import dev.ketox.example.Vector
 
+// 1. Exported functions
 println(RustApi.add(20, 22))
-println(RustApi.hello("Kotlin"))
 
-// Stateful objects implement java.lang.AutoCloseable
+// 2. Simple enums
+val status = Status.Running
+println("Status: $status")
+
+// 3. Sealed classes / ADTs with exhaustive pattern matching
+val shape: Shape = Shape.Circle(5.0)
+val area = when (shape) {
+    is Shape.Circle -> Math.PI * shape.r0 * shape.r0
+    is Shape.Rectangle -> shape.w * shape.h
+    is Shape.Point -> 0.0
+}
+println("Area: $area")
+
+// 4. Pass-by-value data models
+val user = UserProfile(1L, "alice", Status.Idle)
+val updatedUser = user.copy(status = Status.Running)
+
+// 5. Stateful objects implement java.lang.AutoCloseable
 Vector(3.0, 4.0).use { v1 ->
     println("Magnitude: ${v1.magnitude()}") // 5.0
     v1.scale(2.0)
@@ -64,6 +117,10 @@ Vector(3.0, 4.0).use { v1 ->
         println("Dot product: ${v1.dot(v2)}")
     }
 }
+
+// 6. Rich collections
+val filtered = RustApi.filterNames(arrayOf("apple", "banana", "apricot"), "ap")
+println(filtered.toList()) // [apple, apricot]
 ```
 
 ## Run the example and tests
@@ -151,12 +208,16 @@ Both commands require the source, package, object name (`--class`), and library 
 - **Unit:** `()` as a return type
 - **Nullability:** `Option<T>` for parameters and returns, mapped to Kotlin `T?` (with boxed primitives or nullable references)
 - **Errors:** `Result<T, E>` returns, returning `T` directly to Kotlin and converting `Err` to JVM `RuntimeException`
-- **Arrays:** Byte arrays (`Vec<u8>`, `&[u8]`) mapped to Kotlin `ByteArray`, and primitive arrays (`IntArray`, `LongArray`, `FloatArray`, `DoubleArray`, `BooleanArray`) for `Vec<T>` and `&[T]`
+- **Primitive Arrays:** Byte arrays (`Vec<u8>`, `&[u8]`) mapped to Kotlin `ByteArray`, and primitive arrays (`IntArray`, `LongArray`, `FloatArray`, `DoubleArray`, `BooleanArray`) for `Vec<T>` and `&[T]`
+- **String Collections:** `Vec<String>` and `&[String]` mapped to Kotlin `Array<String>`
+- **Simple Enums:** `#[kotlin_enum]` C-like fieldless enums mapped to Kotlin `enum class` with JNI ordinal dispatch
+- **Data-Bearing Enums / ADTs:** `#[kotlin_enum]` enums with payloads mapped to Kotlin `sealed class` with `data class` / `data object` variants for exhaustive pattern matching
+- **Data Models / Value Structs:** `#[kotlin_model]` (or `#[kotlin_data]`) structs mapped to Kotlin `data class`, supporting recursive nesting of models and enums
 - **Classes & Structs:** `#[kotlin_class]` structs, `#[kotlin_constructor]` associated functions, and `#[kotlin_export] impl` methods (`&self` and `&mut self`). Managed via thread-safe `Arc<RwLock<T>>` handle registry with safe double-close and stale handle protection.
 
-Rust snake_case function and method names become Kotlin lowerCamelCase names. Struct names become PascalCase Kotlin classes. Unsupported declarations and naming collisions produce diagnostics.
+Rust snake_case function and method names become Kotlin lowerCamelCase names. Struct and enum names become PascalCase Kotlin types. Unsupported declarations and naming collisions produce diagnostics.
 
-Rust panics are caught and reported as JVM exceptions when compiled with `panic = "unwind"`. See the [type contract](docs/type-system.md) and [ownership and error contract](docs/ownership.md) for exact details.
+Rust panics are caught and reported as JVM exceptions when compiled with `panic = "unwind"`. See the [type contract](docs/type-system.md), [ownership and error contract](docs/ownership.md), and [metadata specification](docs/metadata.md) for exact details.
 
 ## Repository
 
@@ -164,11 +225,11 @@ Rust panics are caught and reported as JVM exceptions when compiled with `panic 
 | --- | --- |
 | `crates/ketox` | User-facing facade, macros re-export, and prelude |
 | `crates/ketox-core` | Metadata, supported types, source validation, and naming |
-| `crates/ketox-macros` | Attribute macros (`#[kotlin_export]`, `#[kotlin_class]`, `#[kotlin_constructor]`) |
+| `crates/ketox-macros` | Attribute macros (`#[kotlin_export]`, `#[kotlin_class]`, `#[kotlin_constructor]`, `#[kotlin_enum]`, `#[kotlin_model]`) |
 | `crates/ketox-codegen` | Deterministic Kotlin, JNI Rust, and JSON generation |
-| `crates/ketox-jni` | String conversion, panic boundary, and thread-safe handle registry |
+| `crates/ketox-jni` | String & collection conversion, panic boundary, and thread-safe handle registry |
 | `crates/ketox-cli` | `ketox generate` and `ketox inspect` commands |
-| `examples/hello-world` | Build-script-driven native library with functions and classes |
+| `examples/hello-world` | Build-script-driven native library with functions, classes, enums, and models |
 | `integration-tests/jvm` | End-to-end JVM checks (`-Xcheck:jni`) |
 | `docs` | [Architecture](docs/architecture.md), [types](docs/type-system.md), [ownership](docs/ownership.md), [metadata](docs/metadata.md) |
 

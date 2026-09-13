@@ -1,15 +1,18 @@
 # Changelog
 
-## Unreleased — 0.0.4 development (Phase 4)
+## 0.0.4 development (Phase 4)
 
 - Implemented Simple Enums: Rust C-like fieldless enums ↔ Kotlin `enum class` with JNI ordinal dispatch and static variant fields.
-- Implemented Data-bearing Enums / ADTs: Rust enums with payload ↔ Kotlin `sealed class` with `data class` and `data object` variants.
-- Implemented Data Models / Value Structs: Rust structs annotated with `#[kotlin_model]` (or `#[kotlin_data]`) ↔ Kotlin `data class`, supporting nested models, enums, options, and collections.
-- Added Rich Collections support: `Vec<String>` and `&[String]` mapped to Kotlin `Array<String>` (`[Ljava/lang/String;`).
-- Added `#[kotlin_enum]` and `#[kotlin_model]` attribute macros to `ketox-macros` and exported in `ketox::prelude`.
+- Implemented Data-bearing Enums / ADTs: Rust enums with payload ↔ Kotlin `sealed class` with `data class` (for variants with fields) and `data object` (for fieldless variants) subclasses, supporting exhaustive `when` matching without `else`.
+- Implemented Data Models / Value Structs: Rust structs annotated with `#[kotlin_model]` (or `#[kotlin_data]`) ↔ Kotlin `data class`, supporting nested models, enums, options, and collections with pass-by-value semantics and GC lifecycle.
+- Added Rich Collections support: `Vec<String>` and `&[String]` mapped to Kotlin `Array<String>` (`[Ljava/lang/String;`), alongside nullable collection variants (`Option<Vec<String>>`).
+- Added `#[kotlin_enum]` and `#[kotlin_model]` attribute macros to `ketox-macros` and exported them in `ketox` and `ketox::prelude`.
 - Bumped metadata schema to version 4 with backward compatibility for versions 1, 2, 3, and 4.
-- Added recursive field reading and writing code generation for nested models and enums.
-- Added comprehensive unit and JVM integration tests (`-Xcheck:jni`) verifying enums, sealed class pattern matching, data models, and string arrays.
+- Added recursive field reading and writing code generation for arbitrarily nested models and enums.
+- Updated `ketox-codegen` to emit type converters for enum ordinals and model constructors/field getters.
+- Added comprehensive unit, contract validation, and trybuild compile tests for Phase 4 enums, models, and collections.
+- Added end-to-end JVM integration tests in `integration-tests/jvm/Smoke.kt` executed with `-Xcheck:jni` verifying simple enums, sealed classes, nested models, and string arrays.
+- Updated documentation across `README.md`, `ROADMAP.md`, `architecture.md`, `metadata.md`, `metadata.schema.json`, `ownership.md`, and `type-system.md`.
 
 ## 0.0.3 development (Phase 3)
 

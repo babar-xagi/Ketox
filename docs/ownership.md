@@ -18,9 +18,17 @@ Rust structs annotated with `#[kotlin_class]` are managed in memory through a th
   - Immutable methods (`&self`) acquire a read lock, enabling safe concurrent execution across multiple JVM threads.
   - Mutable methods (`&mut self`) acquire an exclusive write lock, ensuring thread-safe mutations without data races.
 - **Explicit Destruction:** Generated Kotlin classes implement `java.lang.AutoCloseable`. Calling `close()` or using Kotlin's `.use { ... }` block invokes the native destructor (`destroy_handle`), releasing the Rust memory.
-- **Stale-Handle & Double-Free Protection:**
+- Stale-Handle & Double-Free Protection:
   - Method calls check handle validity before invocation. Attempting to use an invalid or closed handle throws `IllegalStateException("Native handle <id> is invalid or already closed")`.
   - Calling `close()` multiple times is idempotent and safe; subsequent `close()` invocations on a closed handle are no-ops.
+
+## Pass-by-Value Models, Enums, and Collections (Phase 4)
+
+Types annotated with `#[kotlin_model]` (or `#[kotlin_data]`) and `#[kotlin_enum]` are pass-by-value data carriers:
+- **No Native Handles:** Unlike `#[kotlin_class]` instances, value models and enums do not allocate native handles or register in `HANDLE_REGISTRY`.
+- **Pure JVM Objects:** Data is serialized/reconstructed across the JNI boundary as standard Kotlin `data class`, `enum class`, and `sealed class` instances.
+- **Garbage Collection:** Kotlin-side instances are managed entirely by the JVM Garbage Collector. No manual `close()` or lifecycle tracking is needed.
+- **String Collections:** `Vec<String>` and `&[String]` are mapped to Kotlin `Array<String>` (`[Ljava/lang/String;`). Input arrays are fully validated, copied to Rust strings, and cleaned up locally. Output arrays are allocated and populated within JNI local frame boundaries.
 
 ## Exceptions and panics
 
