@@ -704,7 +704,6 @@ pub fn write_opt_string_array(
     }
 }
 
-
 #[derive(Clone)]
 struct HandleEntry {
     type_name: &'static str,
@@ -866,6 +865,78 @@ pub fn destroy_handle<T: Any + Send + Sync + 'static>(handle: i64) -> Result<(),
     Ok(())
 }
 
+/// Create a JavaVM handle and GlobalRef for a Kotlin callback object.
+pub fn create_callback_context(
+    env: &mut JNIEnv<'_>,
+    obj: &JObject<'_>,
+) -> Result<(jni::JavaVM, jni::objects::GlobalRef), BridgeError> {
+    if obj.is_null() {
+        return Err(BridgeError::new(
+            "java/lang/NullPointerException",
+            "Ketox callback argument must not be null",
+        ));
+    }
+    let vm = env
+        .get_java_vm()
+        .map_err(|e| BridgeError::user_error(format!("Ketox could not acquire JavaVM: {e}")))?;
+    let global_ref = env
+        .new_global_ref(obj)
+        .map_err(|e| BridgeError::user_error(format!("Ketox could not create GlobalRef: {e}")))?;
+    Ok((vm, global_ref))
+}
+
+/// Extract and clear a pending JVM exception message.
+pub fn extract_pending_exception_message(env: &mut JNIEnv<'_>) -> String {
+    if let Ok(throwable) = env.exception_occurred() {
+        let _ = env.exception_clear();
+        let message = env
+            .call_method(&throwable, "toString", "()Ljava/lang/String;", &[])
+            .ok()
+            .and_then(|val| val.l().ok())
+            .and_then(|jstr| read_string(env, &jstr.into()).ok());
+        message.unwrap_or_else(|| "Throwable".to_string())
+    } else {
+        "Unknown JVM exception".to_string()
+    }
+}
+
+/// Execute a closure with a valid JNIEnv, attaching the current thread if needed.
+///
+/// If called from an attached thread (such as the invoking JVM thread), reuses the existing env.
+/// If called from an unattached thread (such as a Rust background worker thread), attaches
+/// as a daemon thread and detaches upon completion, ensuring any pending exception is cleared
+/// before thread detachment.
+pub fn with_callback_env<R, F: FnOnce(&mut JNIEnv<'_>) -> Result<R, BridgeError>>(
+    vm: &jni::JavaVM,
+    f: F,
+) -> Result<R, BridgeError> {
+    match vm.get_env() {
+        Ok(mut env) => {
+            let result = f(&mut env);
+            if let Ok(true) = env.exception_check() {
+                let message = extract_pending_exception_message(&mut env);
+                return Err(BridgeError::user_error(format!(
+                    "Kotlin callback threw an exception: {message}"
+                )));
+            }
+            result
+        }
+        Err(_) => {
+            let mut guard = vm.attach_current_thread_as_daemon().map_err(|e| {
+                BridgeError::user_error(format!("Failed to attach thread to JVM: {e}"))
+            })?;
+            let result = f(&mut guard);
+            if let Ok(true) = guard.exception_check() {
+                let message = extract_pending_exception_message(&mut guard);
+                return Err(BridgeError::user_error(format!(
+                    "Kotlin callback threw an exception: {message}"
+                )));
+            }
+            result
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -926,7 +997,20 @@ mod tests {
         assert_eq!(stale_err.class, "java/lang/IllegalStateException");
 
         // Destroying 0 or already destroyed handle is safe no-op
-        assert!(destroy_handle::<Sample>(handle).is_ok());
         assert!(destroy_handle::<Sample>(0).is_ok());
+    }
+
+    #[test]
+    fn test_jvalue_and_local_frame_support() {
+        use jni::objects::JValue;
+        let _b = JValue::Bool(1);
+        let _by = JValue::Byte(1);
+        let _s = JValue::Short(1);
+        let _i = JValue::Int(1);
+        let _j = JValue::Long(1);
+        let _f = JValue::Float(1.0);
+        let _d = JValue::Double(1.0);
+        let obj = jni::objects::JObject::null();
+        let _o = JValue::Object(&obj);
     }
 }

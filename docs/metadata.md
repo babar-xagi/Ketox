@@ -1,10 +1,10 @@
-# Ketox metadata version 4
+# Ketox metadata version 5
 
-`ketox-core::Module` is the in-memory contract. `ketox-metadata.json` is its serialized representation. The [JSON schema](metadata.schema.json) describes the structural shape for schema versions 1, 2, 3, and 4; `ketox-core::validate_module` additionally enforces naming rules, derived Kotlin names, uniqueness, and supported positions for types.
+`ketox-core::Module` is the in-memory contract. `ketox-metadata.json` is its serialized representation. The [JSON schema](metadata.schema.json) describes the structural shape for schema versions 1, 2, 3, 4, and 5; `ketox-core::validate_module` additionally enforces naming rules, derived Kotlin names, uniqueness, and supported positions for types.
 
 ```json
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "package": "dev.ketox.example",
   "class_name": "RustApi",
   "library_name": "ketox_hello",
@@ -17,6 +17,15 @@
         { "name": "b", "ty": "i32" }
       ],
       "return_type": "i32"
+    },
+    {
+      "rust_name": "download",
+      "kotlin_name": "download",
+      "parameters": [
+        { "name": "url", "ty": "string" },
+        { "name": "listener", "ty": { "callback": "ProgressListener" } }
+      ],
+      "return_type": "unit"
     }
   ],
   "classes": [
@@ -82,6 +91,24 @@
         { "name": "status", "ty": { "enum": "Status" } }
       ]
     }
+  ],
+  "callbacks": [
+    {
+      "rust_name": "ProgressListener",
+      "kotlin_name": "ProgressListener",
+      "methods": [
+        {
+          "rust_name": "on_progress",
+          "kotlin_name": "onProgress",
+          "parameters": [
+            { "name": "current", "ty": "i32" },
+            { "name": "total", "ty": "i32" },
+            { "name": "message", "ty": "string" }
+          ],
+          "return_type": "unit"
+        }
+      ]
+    }
   ]
 }
 ```
@@ -95,11 +122,14 @@ Types serialize as:
 - Class: `{"class": "<class_name>"}`
 - Enum: `{"enum": "<enum_name>"}`
 - Model: `{"model": "<model_name>"}`
+- Callback: `{"callback": "<callback_name>"}`
 
-Source discovery sorts functions, classes, enums, and models by their Rust names. Code generation preserves the order supplied in validated metadata and emits fixed formatting, without timestamps or machine-specific paths in generated content. Reusing identical metadata yields identical artifacts. JSON consumers must reject unsupported schema versions and unknown fields rather than guessing their meaning.
+Source discovery sorts functions, classes, enums, models, and callbacks by their Rust names. Code generation preserves the order supplied in validated metadata and emits fixed formatting, without timestamps or machine-specific paths in generated content. Reusing identical metadata yields identical artifacts. JSON consumers must reject unsupported schema versions and unknown fields rather than guessing their meaning.
 
-Version 4 introduces support for:
-- Simple fieldless enums (mapped to Kotlin `enum class`)
-- Data-bearing enums / ADTs (mapped to Kotlin `sealed class` with `data class` / `data object` variants)
-- Data models / value structs (annotated with `#[kotlin_model]`, mapped to Kotlin `data class`)
-- String arrays and slices (`Vec<String>` and `&[String]` mapped to Kotlin `Array<String>`)
+Version 5 introduces support for:
+- Callback traits (`#[kotlin_callback]`)
+- Single-method callbacks mapped to Kotlin `fun interface` (supporting idiomatic SAM trailing lambdas)
+- Multi-method callbacks mapped to Kotlin `interface`
+- Cross-thread callback invocations (`std::thread::spawn` using daemon thread attachment via `AttachCurrentThreadAsDaemon`)
+- Automatic resource cleanup (GlobalRef + JavaVM) with zero leaked references
+- Clean exception propagation and containment before thread detachment

@@ -116,3 +116,21 @@ pub fn kotlin_model(args: TokenStream, item: TokenStream) -> TokenStream {
     }
     .into()
 }
+
+/// Marks a Rust trait for export as a Kotlin callback interface.
+#[proc_macro_attribute]
+pub fn kotlin_callback(args: TokenStream, item: TokenStream) -> TokenStream {
+    if !args.is_empty() {
+        return syn::Error::new(
+            proc_macro::Span::call_site().into(),
+            "Ketox: #[kotlin_callback] does not accept arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let item_trait = syn::parse_macro_input!(item as syn::ItemTrait);
+    quote! {
+        #item_trait
+    }
+    .into()
+}

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.0.5 development (Phase 5)
+
+- Implemented bidirectional Callbacks & JVM interaction: Rust calling Kotlin functions, interfaces, and lambdas.
+- Added `#[kotlin_callback]` attribute macro for exporting Rust traits as Kotlin interfaces.
+- Implemented Single-Method Callbacks: mapped to Kotlin `fun interface` (supporting idiomatic trailing lambdas via SAM conversion).
+- Implemented Multi-Method Callbacks: mapped to Kotlin `interface` for complex multi-event listeners.
+- Supported Rust trait object signatures: `Box<dyn Trait>`, `Box<dyn Trait + Send + Sync>`, and `Option<Box<dyn Trait>>`.
+- Implemented generated proxy structs `__KetoxCallback_{Trait}` wrapping `JavaVM` and `GlobalRef`, implementing the Rust trait.
+- Supported Synchronous Callbacks: direct JNI invocations on the active thread with scoped local reference frames (`with_local_frame`).
+- Supported Cross-Thread Callbacks: invoked from background worker threads spawned with `std::thread::spawn`.
+- Implemented Daemon Thread Lifecycle: automatic JVM thread attachment (`AttachCurrentThreadAsDaemon`) and automatic detachment on thread exit.
+- Implemented Safe Exception Extraction & Clearance: uncaught Kotlin exceptions inside callbacks are captured and cleared prior to thread detachment, preventing JVM fatal termination, with safe panic containment via `ketox_jni::boundary`.
+- Zero Leaked References Guarantee: `GlobalRef` is automatically freed when the Rust trait object is dropped; zero local reference table leaks.
+- Bumped metadata schema to version 5 with backward compatibility for versions 1, 2, 3, 4, and 5.
+- Added comprehensive unit tests in `ketox-core` and `ketox-codegen`, updated trybuild UI tests, and added end-to-end JVM integration checks in `Smoke.kt` executed with `-Xcheck:jni`.
+
 ## 0.0.4 development (Phase 4)
 
 - Implemented Simple Enums: Rust C-like fieldless enums ↔ Kotlin `enum class` with JNI ordinal dispatch and static variant fields.

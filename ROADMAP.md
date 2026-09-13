@@ -58,20 +58,34 @@ The [full design and roadmap](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) remains 
 - [x] Implement JNI conversion helpers and recursive nested field readers/writers in `ketox-codegen` and `ketox-jni`.
 - [x] Verify complete Phase 4 on JVM with `-Xcheck:jni` covering simple enums, sealed classes with `when` pattern matching, data models with nested structures, and string collections.
 
+## Milestone: Phase 5 — Callbacks & JVM Interaction (Completed)
+
+- [x] Extend metadata schema to version 5 with `callbacks` and `Type::Callback`.
+- [x] Add `#[kotlin_callback]` attribute macro for exporting Rust traits as Kotlin interfaces.
+- [x] Implement Single-Method Callbacks: mapped to Kotlin `fun interface` (supporting idiomatic trailing lambdas via SAM conversion).
+- [x] Implement Multi-Method Callbacks: mapped to Kotlin `interface` for complex event listeners.
+- [x] Implement Rust Trait Object Support: pass callbacks as `Box<dyn Trait>`, `Box<dyn Trait + Send + Sync>`, and `Option<Box<dyn Trait>>`.
+- [x] Implement Generated Proxy Structs: `__KetoxCallback_{Trait}` wrapping `JavaVM` and `GlobalRef`, implementing the Rust trait.
+- [x] Implement Synchronous Callbacks: direct JNI invocations on the active thread with local frame cleanup (`with_local_frame`).
+- [x] Implement Cross-Thread Callbacks: worker threads spawned via `std::thread::spawn` calling Kotlin callbacks.
+- [x] Implement Daemon Thread Lifecycle: automatic JVM thread attachment via `AttachCurrentThreadAsDaemon` and automatic detachment on thread exit.
+- [x] Implement Exception Propagation & Safe Detach: cleanly inspect, extract, and clear pending Kotlin exceptions before thread detachment, containing errors safely via `ketox_jni::boundary`.
+- [x] Implement Zero Leaks Guarantee: automatic GlobalRef destruction when Rust trait object drops; zero local reference table leaks.
+- [x] Verify complete Phase 5 on JVM with `-Xcheck:jni` covering synchronous lambdas, return-value filter callbacks, cross-thread worker execution, multi-method listeners, and exception recovery.
+
 ## Validation status
 
 | Environment | Status |
 | --- | --- |
 | Local Windows Rust checks | All tests, lints, and formatting pass (`cargo test --workspace`) |
-| Local Windows JVM checks | Passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Vector class, methods, mutation, AutoCloseable, stale handle protection, Simple Enums, Sealed Classes / ADTs, Data Models, String Arrays (`-Xcheck:jni`) |
+| Local Windows JVM checks | Passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Vector class, methods, mutation, AutoCloseable, stale handle protection, Simple Enums, Sealed Classes / ADTs, Data Models, String Arrays, Callbacks (SAM trailing lambdas, multi-method, cross-thread daemon threads, exception recovery) (`-Xcheck:jni`) |
 | GitHub Actions Windows/Linux/macOS | Configured; tested locally |
 | Rust minimum-version check | Verified |
 | Android and Kotlin/Native | Planned for future phases |
 
-## Next work (Phase 5)
+## Next work (Phase 6)
 
-1. Callbacks, function pointers, and Kotlin lambdas.
-2. Async integration: Kotlin coroutines and Rust futures / channels.
-3. Android distribution (AAR packaging) and Gradle plugin integration.
-4. Kotlin Multiplatform / Kotlin/Native backend.
+1. Async integration: Kotlin coroutines and Rust futures / channels (`suspend fun` ↔ `async fn`).
+2. Android distribution (AAR packaging) and Gradle plugin integration.
+3. Kotlin Multiplatform / Kotlin/Native backend.
 

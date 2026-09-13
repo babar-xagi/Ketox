@@ -30,6 +30,14 @@ Types annotated with `#[kotlin_model]` (or `#[kotlin_data]`) and `#[kotlin_enum]
 - **Garbage Collection:** Kotlin-side instances are managed entirely by the JVM Garbage Collector. No manual `close()` or lifecycle tracking is needed.
 - **String Collections:** `Vec<String>` and `&[String]` are mapped to Kotlin `Array<String>` (`[Ljava/lang/String;`). Input arrays are fully validated, copied to Rust strings, and cleaned up locally. Output arrays are allocated and populated within JNI local frame boundaries.
 
+## Callback Ownership, Global References, and Thread Lifecycle (Phase 5)
+
+Rust traits annotated with `#[kotlin_callback]` receive Kotlin callback instances or lambdas:
+- **Global References (`GlobalRef`):** When a Kotlin callback object is passed into Rust, `ketox-jni` acquires a `JavaVM` instance and creates a `GlobalRef` protecting the Kotlin object from JVM garbage collection while Rust holds it.
+- **Automatic Reference Drop:** When the Rust callback proxy drops (e.g. at the end of the function or worker thread), the `GlobalRef` drops automatically, releasing the JVM reference with zero memory leaks.
+- **Cross-Thread Thread Attachment (`AttachCurrentThreadAsDaemon`):** When invoking a callback from a Rust background thread (e.g. `std::thread::spawn`), `with_callback_env` checks if the current thread is attached. If unattached, it attaches as a daemon thread and automatically detaches when the scope ends.
+- **Exception Safety and Safe Detachment:** If a Kotlin callback throws an uncaught exception, JNI prohibits detaching the thread while an exception is pending. `with_callback_env` catches the exception, extracts its message via `toString()`, and clears it before thread detachment, preventing JVM fatal termination. The error is then safely caught and contained by `ketox_jni::boundary`.
+
 ## Exceptions and panics
 
 Every generated entry point places input conversion, the Rust function call, and output conversion inside the runtime boundary.
@@ -37,7 +45,8 @@ Every generated entry point places input conversion, the Rust function call, and
 | Condition | JVM behavior |
 | --- | --- |
 | Rust unwinding panic | `RuntimeException` containing a Ketox panic message |
-| Null string or array input | `NullPointerException` |
+| Kotlin callback exception | `RuntimeException` containing the original Kotlin exception message |
+| Null string, array, or callback input | `NullPointerException` |
 | Unpaired UTF-16 surrogate | `IllegalArgumentException` |
 | String or array above configured limit | `IllegalArgumentException` |
 | Invalid or closed native handle | `IllegalStateException` |

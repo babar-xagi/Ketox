@@ -148,6 +148,71 @@ fun main() {
     check(filtered.contentEquals(arrayOf("Alice", "Alexander")))
     check(RustApi.filterNames(emptyArray(), "test").isEmpty())
 
+    // Phase 5: Callbacks - Synchronous single-method trailing lambda (SAM conversion)
+    val progressEvents = mutableListOf<String>()
+    RustApi.download("https://example.com/data.bin") { current, total, msg ->
+        progressEvents.add("$current/$total: $msg")
+    }
+    check(progressEvents.size == 2)
+    check(progressEvents[0] == "10/100: Downloading https://example.com/data.bin")
+    check(progressEvents[1] == "100/100: Downloaded https://example.com/data.bin successfully")
+
+    // Phase 5: Callbacks - Synchronous with return value (filter)
+    val itemsToFilter = arrayOf("apple", "banana", "avocado", "cherry", "apricot")
+    val keptItems = RustApi.filterStrings(itemsToFilter) { item ->
+        item.startsWith("a")
+    }
+    check(keptItems.contentEquals(arrayOf("apple", "avocado", "apricot")))
+
+    // Phase 5: Callbacks - Cross-thread from Rust background thread (std::thread::spawn)
+    val bgProgress = java.util.concurrent.CopyOnWriteArrayList<String>()
+    RustApi.runBackgroundTask { current, total, msg ->
+        bgProgress.add("$current/$total: $msg")
+    }
+    check(bgProgress.size == 2)
+    check(bgProgress[0] == "50/100: Background task working")
+    check(bgProgress[1] == "100/100: Background task finished")
+
+    // Phase 5: Callbacks - Multi-method interface implementation
+    var started = false
+    var completedResult: String? = null
+    var errorCode = 0
+    var errorMessage: String? = null
+
+    RustApi.executeTask(object : TaskListener {
+        override fun onStart() { started = true }
+        override fun onComplete(result: String) { completedResult = result }
+        override fun onError(code: Int, message: String) { errorCode = code; errorMessage = message }
+    }, succeed = true)
+    check(started && completedResult == "All operations completed successfully" && errorCode == 0)
+
+    started = false
+    completedResult = null
+    RustApi.executeTask(object : TaskListener {
+        override fun onStart() { started = true }
+        override fun onComplete(result: String) { completedResult = result }
+        override fun onError(code: Int, message: String) { errorCode = code; errorMessage = message }
+    }, succeed = false)
+    check(started && completedResult == null && errorCode == 404 && errorMessage == "Operation not found")
+
+    // Phase 5: Callbacks - Optional callback parameter
+    var optFired = false
+    RustApi.optCallback { _, _, _ -> optFired = true }
+    check(optFired)
+
+    optFired = false
+    RustApi.optCallback(null)
+    check(!optFired)
+
+    // Phase 5: Callbacks - Exception propagation & JVM recovery
+    expectFailure<RuntimeException> {
+        RustApi.callCallbackThatFails { _, _, _ ->
+            throw IllegalArgumentException("intentional Kotlin callback failure")
+        }
+    }
+    // Verify JVM remains healthy after callback exception
+    check(RustApi.add(10, 20) == 30)
+
     val threads = (1..4).map { worker ->
         Thread {
             repeat(100) { check(RustApi.echo("thread-$worker-🦀") == "thread-$worker-🦀") }
@@ -161,5 +226,5 @@ fun main() {
     threads.forEach { it.join() }
     check(failures.isEmpty()) { "Concurrent JNI calls failed: $failures" }
     println(RustApi.hello("Kotlin"))
-    println("Ketox JVM smoke tests passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Classes, Structs, Enums, SealedClasses, Models, Collections, Lifecycle")
+    println("Ketox JVM smoke tests passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Classes, Structs, Enums, SealedClasses, Models, Collections, Callbacks, CrossThread, Exceptions, Lifecycle")
 }

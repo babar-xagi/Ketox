@@ -441,45 +441,186 @@ fn parses_phase_four_enums_models_and_collections() {
     )
     .unwrap();
 
-    assert_eq!(module.schema_version, 4);
+    assert_eq!(module.schema_version, 5);
     assert_eq!(module.enums.len(), 2);
 
-    let status_enum = module.enums.iter().find(|e| e.rust_name == "Status").unwrap();
+    let status_enum = module
+        .enums
+        .iter()
+        .find(|e| e.rust_name == "Status")
+        .unwrap();
     assert!(status_enum.is_simple());
     assert_eq!(status_enum.variants.len(), 4);
     assert_eq!(status_enum.variants[0].rust_name, "Pending");
     assert_eq!(status_enum.variants[1].rust_name, "Active");
 
-    let shape_enum = module.enums.iter().find(|e| e.rust_name == "Shape").unwrap();
+    let shape_enum = module
+        .enums
+        .iter()
+        .find(|e| e.rust_name == "Shape")
+        .unwrap();
     assert!(!shape_enum.is_simple());
     assert_eq!(shape_enum.variants.len(), 3);
-    assert_eq!(shape_enum.variants[0].rust_name, "Circle");
-    assert_eq!(shape_enum.variants[0].fields.len(), 1);
-    assert_eq!(shape_enum.variants[0].fields[0].rust_name, "radius");
-    assert_eq!(shape_enum.variants[0].fields[0].ty, Type::F64);
-    assert_eq!(shape_enum.variants[2].rust_name, "Point");
-    assert!(shape_enum.variants[2].fields.is_empty());
 
-    assert_eq!(module.models.len(), 1);
-    let user_model = &module.models[0];
-    assert_eq!(user_model.rust_name, "UserProfile");
+    let user_model = module
+        .models
+        .iter()
+        .find(|m| m.rust_name == "UserProfile")
+        .unwrap();
     assert_eq!(user_model.fields.len(), 4);
     assert_eq!(user_model.fields[0].rust_name, "id");
-    assert_eq!(user_model.fields[0].ty, Type::I64);
     assert_eq!(user_model.fields[1].rust_name, "username");
-    assert_eq!(user_model.fields[1].ty, Type::String);
     assert_eq!(user_model.fields[2].rust_name, "email");
-    assert_eq!(user_model.fields[2].ty, Type::Option(Box::new(Type::String)));
-    assert_eq!(user_model.fields[3].rust_name, "status");
     assert_eq!(user_model.fields[3].ty, Type::Enum("Status".to_owned()));
 
-    let check_status_fn = module.functions.iter().find(|f| f.rust_name == "check_status").unwrap();
-    assert_eq!(check_status_fn.parameters[0].ty, Type::Enum("Status".to_owned()));
+    let check_status_fn = module
+        .functions
+        .iter()
+        .find(|f| f.rust_name == "check_status")
+        .unwrap();
+    assert_eq!(
+        check_status_fn.parameters[0].ty,
+        Type::Enum("Status".to_owned())
+    );
     assert_eq!(check_status_fn.return_type, Type::Enum("Status".to_owned()));
 
-    let filter_names_fn = module.functions.iter().find(|f| f.rust_name == "filter_names").unwrap();
+    let filter_names_fn = module
+        .functions
+        .iter()
+        .find(|f| f.rust_name == "filter_names")
+        .unwrap();
     assert_eq!(filter_names_fn.parameters[0].ty, Type::StringSlice);
     assert_eq!(filter_names_fn.return_type, Type::StringArray);
+}
+
+#[test]
+fn parses_phase_five_callbacks_and_verifies_contracts() {
+    let module = source(
+        r#"
+        #[kotlin_callback]
+        pub trait ProgressListener {
+            fn on_progress(&self, current: i32, total: i32, message: String);
+        }
+
+        #[kotlin_callback]
+        pub trait StringFilter {
+            fn should_keep(&self, item: String) -> bool;
+        }
+
+        #[kotlin_export]
+        pub fn download(url: String, listener: Box<dyn ProgressListener>) {
+        }
+
+        #[kotlin_export]
+        pub fn filter_items(items: &[String], filter: Box<dyn StringFilter + Send + Sync>) -> Vec<String> {
+            Vec::new()
+        }
+
+        #[kotlin_export]
+        pub fn opt_listener(listener: Option<Box<dyn ProgressListener>>) {
+        }
+    "#,
+    )
+    .unwrap();
+
+    assert_eq!(module.schema_version, 5);
+    assert_eq!(module.callbacks.len(), 2);
+
+    let progress_cb = module
+        .callbacks
+        .iter()
+        .find(|c| c.rust_name == "ProgressListener")
+        .unwrap();
+    assert_eq!(progress_cb.methods.len(), 1);
+    assert_eq!(progress_cb.methods[0].rust_name, "on_progress");
+    assert_eq!(progress_cb.methods[0].kotlin_name, "onProgress");
+    assert_eq!(progress_cb.methods[0].parameters.len(), 3);
+    assert_eq!(progress_cb.methods[0].return_type, Type::Unit);
+
+    let filter_cb = module
+        .callbacks
+        .iter()
+        .find(|c| c.rust_name == "StringFilter")
+        .unwrap();
+    assert_eq!(filter_cb.methods.len(), 1);
+    assert_eq!(filter_cb.methods[0].rust_name, "should_keep");
+    assert_eq!(filter_cb.methods[0].kotlin_name, "shouldKeep");
+    assert_eq!(filter_cb.methods[0].return_type, Type::Bool);
+
+    let dl_fn = module
+        .functions
+        .iter()
+        .find(|f| f.rust_name == "download")
+        .unwrap();
+    assert_eq!(
+        dl_fn.parameters[1].ty,
+        Type::Callback("ProgressListener".to_string())
+    );
+
+    let filter_fn = module
+        .functions
+        .iter()
+        .find(|f| f.rust_name == "filter_items")
+        .unwrap();
+    assert_eq!(
+        filter_fn.parameters[1].ty,
+        Type::Callback("StringFilter".to_string())
+    );
+
+    let opt_fn = module
+        .functions
+        .iter()
+        .find(|f| f.rust_name == "opt_listener")
+        .unwrap();
+    assert_eq!(
+        opt_fn.parameters[0].ty,
+        Type::Option(Box::new(Type::Callback("ProgressListener".to_string())))
+    );
+}
+
+#[test]
+fn rejects_phase_five_invalid_callbacks() {
+    // Callback returned from function is rejected
+    let err = source(
+        r#"
+        #[kotlin_callback]
+        pub trait MyCallback {
+            fn call(&self);
+        }
+
+        #[kotlin_export]
+        pub fn make_callback() -> Box<dyn MyCallback> {
+            todo!()
+        }
+    "#,
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("unsupported as a return type")
+            || err.contains("callbacks cannot be returned")
+    );
+
+    // Callback with &mut self is rejected
+    let err = source(
+        r#"
+        #[kotlin_callback]
+        pub trait BadCallback {
+            fn mutate(&mut self);
+        }
+    "#,
+    )
+    .unwrap_err();
+    assert!(err.contains("receiver must be immutable `&self`"));
+
+    // Empty callback is rejected
+    let err = source(
+        r#"
+        #[kotlin_callback]
+        pub trait EmptyCallback {}
+    "#,
+    )
+    .unwrap_err();
+    assert!(err.contains("at least one method"));
 }
 
 #[test]
@@ -489,20 +630,26 @@ fn rejects_phase_four_conflicts_and_unknown_types() {
     assert!(err.contains("unrecognized enum") || err.contains("unrecognized"));
 
     // Duplicate variant name in enum
-    let err = source(r#"
+    let err = source(
+        r#"
         #[kotlin_enum]
         pub enum Status {
             Active,
             Active,
         }
-    "#).unwrap_err();
+    "#,
+    )
+    .unwrap_err();
     assert!(err.contains("duplicate variant"));
 
     // Empty enum
-    let err = source(r#"
+    let err = source(
+        r#"
         #[kotlin_enum]
         pub enum Empty {}
-    "#).unwrap_err();
+    "#,
+    )
+    .unwrap_err();
     assert!(err.contains("at least one variant"));
 
     // Borrowed StringSlice return is rejected

@@ -1454,10 +1454,10 @@ thread attach/detach
 
 ### Definition of Done
 
-- [ ] synchronous callbacks
-- [ ] cross-thread callbacks
-- [ ] no leaked global JNI refs
-- [ ] callback exception handling
+- [x] synchronous callbacks
+- [x] cross-thread callbacks
+- [x] no leaked global JNI refs
+- [x] callback exception handling
 - [ ] concurrency stress tests
 
 ### Suggested Release

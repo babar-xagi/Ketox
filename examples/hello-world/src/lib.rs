@@ -200,7 +200,11 @@ pub fn inspect_canvas(canvas: Canvas) -> String {
 
 #[kotlin_export]
 pub fn filter_names(names: &[String], query: &str) -> Vec<String> {
-    names.iter().filter(|s| s.contains(query)).cloned().collect()
+    names
+        .iter()
+        .filter(|s| s.contains(query))
+        .cloned()
+        .collect()
 }
 
 #[kotlin_export]
@@ -215,6 +219,72 @@ pub fn opt_user(id: i64) -> Option<UserProfile> {
     } else {
         None
     }
+}
+
+#[kotlin_callback]
+pub trait ProgressListener {
+    fn on_progress(&self, current: i32, total: i32, message: String);
+}
+
+#[kotlin_callback]
+pub trait StringFilter {
+    fn should_keep(&self, item: String) -> bool;
+}
+
+#[kotlin_callback]
+pub trait TaskListener {
+    fn on_start(&self);
+    fn on_complete(&self, result: String);
+    fn on_error(&self, code: i32, message: String);
+}
+
+#[kotlin_export]
+pub fn download(url: String, listener: Box<dyn ProgressListener>) {
+    listener.on_progress(10, 100, format!("Downloading {url}"));
+    listener.on_progress(100, 100, format!("Downloaded {url} successfully"));
+}
+
+#[kotlin_export]
+pub fn filter_strings(
+    items: &[String],
+    filter: Box<dyn StringFilter + Send + Sync>,
+) -> Vec<String> {
+    items
+        .iter()
+        .filter(|s| filter.should_keep((*s).clone()))
+        .cloned()
+        .collect()
+}
+
+#[kotlin_export]
+pub fn run_background_task(listener: Box<dyn ProgressListener + Send + Sync + 'static>) {
+    let handle = std::thread::spawn(move || {
+        listener.on_progress(50, 100, "Background task working".to_string());
+        listener.on_progress(100, 100, "Background task finished".to_string());
+    });
+    handle.join().expect("background worker thread panicked");
+}
+
+#[kotlin_export]
+pub fn execute_task(listener: Box<dyn TaskListener>, succeed: bool) {
+    listener.on_start();
+    if succeed {
+        listener.on_complete("All operations completed successfully".to_string());
+    } else {
+        listener.on_error(404, "Operation not found".to_string());
+    }
+}
+
+#[kotlin_export]
+pub fn opt_callback(listener: Option<Box<dyn ProgressListener>>) {
+    if let Some(l) = listener {
+        l.on_progress(42, 100, "Optional callback fired".to_string());
+    }
+}
+
+#[kotlin_export]
+pub fn call_callback_that_fails(listener: Box<dyn ProgressListener>) {
+    listener.on_progress(1, 10, "Will throw in Kotlin".to_string());
 }
 
 include!(concat!(env!("OUT_DIR"), "/ketox_jni.rs"));

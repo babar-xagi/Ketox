@@ -31,6 +31,7 @@ The JVM backend accepts the following types. Inputs and outputs use the same sig
 | `EnumName` (simple enum) | `EnumName` | `L<package>/<EnumName>;` | Yes | Yes |
 | `EnumName` (data-bearing enum) | `EnumName` | `L<package>/<EnumName>;` | Yes | Yes |
 | `ModelName` (`#[kotlin_model]`) | `ModelName` | `L<package>/<ModelName>;` | Yes | Yes |
+| `Box<dyn Trait>` (`#[kotlin_callback]`) | `TraitName` | `L<package>/<TraitName>;` | Yes | No |
 | `Option<T>` (where `T` is supported) | `T?` | Boxed / Object (e.g. `Ljava/lang/Integer;`) | Yes | Yes |
 | `Result<T, E>` (where `T` is supported, `E: Display`) | `T` (or throws `RuntimeException`) | Return descriptor of `T` | No | Yes |
 | `ClassName` (annotated with `#[kotlin_class]`) | `ClassName` | `J` (handle) / `L<package>/<ClassName>;` | Yes (as `&ClassName`) | Yes (as `ClassName` or `Result<ClassName, E>`) |
@@ -97,8 +98,29 @@ Rust structs annotated with `#[kotlin_model]` (or `#[kotlin_data]`) map to Kotli
 - Supports nested structs, enums, optionals, and collection fields.
 - Converted recursively across the JNI boundary using generated field readers and constructor invocation.
 
+## Callbacks and SAM Conversion (Phase 5)
+
+Rust traits annotated with `#[kotlin_callback]` map to Kotlin interfaces:
+- **Single-Method Traits (`fun interface`):** Traits declaring exactly one method map to Kotlin functional interfaces (`fun interface`). Callers can pass standard instances or idiomatic trailing lambdas (Kotlin SAM conversion):
+  ```kotlin
+  RustApi.download("https://example.com/file") { current, total, msg ->
+      println("$current/$total: $msg")
+  }
+  ```
+- **Multi-Method Traits (`interface`):** Traits declaring multiple methods map to standard Kotlin interfaces:
+  ```kotlin
+  RustApi.executeTask(object : TaskListener {
+      override fun onStart() { ... }
+      override fun onComplete(result: String) { ... }
+      override fun onError(code: Int, message: String) { ... }
+  }, succeed = true)
+  ```
+- **Rust Trait Object Signatures:** Exported functions and methods receive callbacks as `Box<dyn Trait>` or `Box<dyn Trait + Send + Sync>` (or wrapped in `Option<Box<dyn Trait>>`).
+- **Cross-Thread Execution:** Callbacks can be moved into Rust background threads spawned with `std::thread::spawn`. JNI daemon thread attachment (`AttachCurrentThreadAsDaemon`) ensures thread safety and automatic detachment upon thread exit.
+- **Exceptions & Cleanup:** If a Kotlin callback throws an exception, it is caught, extracted, and cleared before thread detachment, preventing JVM fatal detachment crashes. `GlobalRef` objects are dropped automatically when the Rust callback proxy drops.
+
 ## Rejected types and declarations
 
-Unsigned integers (other than element type in `Vec<u8>` / `&[u8]`), pointer-sized integers (`usize`, `isize`), `char`, raw pointers, arbitrary unannotated references, tuples other than a Unit return, maps/dictionaries, nested options (`Option<Option<T>>`), nested results, callbacks, and futures are unsupported in this phase. Fully qualified type names and type aliases are not resolved; use the exact supported spellings in exported signatures.
+Unsigned integers (other than element type in `Vec<u8>` / `&[u8]`), pointer-sized integers (`usize`, `isize`), `char`, raw pointers, arbitrary unannotated references, tuples other than a Unit return, maps/dictionaries, nested options (`Option<Option<T>>`), nested results, and futures/async are unsupported. Fully qualified type names and type aliases are not resolved; use the exact supported spellings in exported signatures.
 
-Borrowed returns and explicit reference lifetimes are rejected. Exports must be safe, synchronous, non-generic functions, with simple named parameters.
+Callbacks cannot be returned from functions or class methods. Borrowed returns and explicit reference lifetimes are rejected. Exports must be safe, non-generic functions, with simple named parameters.

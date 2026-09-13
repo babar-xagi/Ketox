@@ -1,19 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Ketox module metadata schema",
-  "description": "Structural schema for Ketox metadata versions 1, 2, 3, and 4. ketox-core additionally validates reserved names, derived Kotlin names, and function/class/parameter name uniqueness.",
+  "description": "Structural schema for Ketox metadata versions 1, 2, 3, 4, and 5. ketox-core additionally validates reserved names, derived Kotlin names, and function/class/parameter name uniqueness.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "package", "class_name", "library_name", "functions"],
   "properties": {
-    "schema_version": { "enum": [1, 2, 3, 4] },
+    "schema_version": { "enum": [1, 2, 3, 4, 5] },
     "package": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
     "class_name": { "$ref": "#/$defs/identifier" },
     "library_name": { "$ref": "#/$defs/identifier" },
     "functions": { "type": "array", "items": { "$ref": "#/$defs/function" } },
     "classes": { "type": "array", "items": { "$ref": "#/$defs/class" } },
     "enums": { "type": "array", "items": { "$ref": "#/$defs/enum" } },
-    "models": { "type": "array", "items": { "$ref": "#/$defs/model" } }
+    "models": { "type": "array", "items": { "$ref": "#/$defs/model" } },
+    "callbacks": { "type": "array", "items": { "$ref": "#/$defs/callback" } }
   },
   "$defs": {
     "identifier": { "type": "string", "pattern": "^(?!_+$)[A-Za-z_][A-Za-z0-9_]*$" },
@@ -109,6 +110,27 @@
         "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
       }
     },
+    "callback_method": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rust_name", "kotlin_name", "parameters", "return_type"],
+      "properties": {
+        "rust_name": { "$ref": "#/$defs/identifier" },
+        "kotlin_name": { "$ref": "#/$defs/identifier" },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
+        "return_type": { "$ref": "#/$defs/type" }
+      }
+    },
+    "callback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rust_name", "kotlin_name", "methods"],
+      "properties": {
+        "rust_name": { "$ref": "#/$defs/identifier" },
+        "kotlin_name": { "$ref": "#/$defs/identifier" },
+        "methods": { "type": "array", "items": { "$ref": "#/$defs/callback_method" } }
+      }
+    },
     "type": {
       "oneOf": [
         {
@@ -141,6 +163,14 @@
           "required": ["model"],
           "properties": {
             "model": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["callback"],
+          "properties": {
+            "callback": { "$ref": "#/$defs/identifier" }
           }
         },
         {

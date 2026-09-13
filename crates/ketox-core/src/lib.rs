@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use syn::{spanned::Spanned, visit::Visit};
 
 /// The metadata version understood by this release.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +24,37 @@ pub struct Module {
     pub enums: Vec<Enum>,
     #[serde(default)]
     pub models: Vec<Model>,
+    #[serde(default)]
+    pub callbacks: Vec<Callback>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Callback {
+    pub rust_name: String,
+    pub kotlin_name: String,
+    pub methods: Vec<CallbackMethod>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallbackMethod {
+    pub rust_name: String,
+    pub kotlin_name: String,
+    pub parameters: Vec<Parameter>,
+    pub return_type: Type,
+}
+
+impl CallbackMethod {
+    pub fn jni_signature(&self) -> String {
+        let mut signature = String::from("(");
+        for parameter in &self.parameters {
+            signature.push_str(&parameter.ty.jni_signature());
+        }
+        signature.push(')');
+        signature.push_str(&self.return_type.jni_signature());
+        signature
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +192,7 @@ pub enum Type {
     Class(String),
     Enum(String),
     Model(String),
+    Callback(String),
     Option(Box<Type>),
     Result { ok: Box<Type>, err: String },
 }
@@ -185,7 +217,9 @@ impl Type {
             Self::DoubleArray | Self::DoubleSlice => "DoubleArray".to_owned(),
             Self::BooleanArray | Self::BooleanSlice => "BooleanArray".to_owned(),
             Self::StringArray | Self::StringSlice => "Array<String>".to_owned(),
-            Self::Class(name) | Self::Enum(name) | Self::Model(name) => name.clone(),
+            Self::Class(name) | Self::Enum(name) | Self::Model(name) | Self::Callback(name) => {
+                name.clone()
+            }
             Self::Option(inner) => format!("{}?", inner.kotlin_type()),
             Self::Result { ok, .. } => ok.kotlin_type(),
         }
@@ -211,7 +245,7 @@ impl Type {
             Self::BooleanArray | Self::BooleanSlice => "[Z".to_owned(),
             Self::StringArray | Self::StringSlice => "[Ljava/lang/String;".to_owned(),
             Self::Class(_) => "J".to_owned(),
-            Self::Enum(name) | Self::Model(name) => format!("L{name};"),
+            Self::Enum(name) | Self::Model(name) | Self::Callback(name) => format!("L{name};"),
             Self::Option(inner) => match inner.as_ref() {
                 Self::Bool => "Ljava/lang/Boolean;".to_owned(),
                 Self::I8 => "Ljava/lang/Byte;".to_owned(),
@@ -229,7 +263,7 @@ impl Type {
                 Self::BooleanArray | Self::BooleanSlice => "[Z".to_owned(),
                 Self::StringArray | Self::StringSlice => "[Ljava/lang/String;".to_owned(),
                 Self::Class(_) => "Ljava/lang/Long;".to_owned(),
-                Self::Enum(name) | Self::Model(name) => format!("L{name};"),
+                Self::Enum(name) | Self::Model(name) | Self::Callback(name) => format!("L{name};"),
                 _ => "Ljava/lang/Object;".to_owned(),
             },
             Self::Result { ok, .. } => ok.jni_signature(),
@@ -516,6 +550,20 @@ fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
                                 _ => {}
                             }
                         }
+                    } else if (ident_str == "Box" || ident_str == "Arc") && args.args.len() == 1 {
+                        if is_return {
+                            return Err(syn::Error::new_spanned(
+                                ty,
+                                "Box/Arc is unsupported as a return type: return an owned value directly",
+                            ));
+                        }
+                        let elem_ty = match &args.args[0] {
+                            syn::GenericArgument::Type(elem_ty) => Some(elem_ty),
+                            _ => None,
+                        };
+                        if let Some(trait_name) = elem_ty.and_then(extract_trait_object_name) {
+                            return Ok(Type::Class(trait_name));
+                        }
                     }
                 }
                 _ => {}
@@ -529,6 +577,9 @@ fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
                     ty,
                     "borrowed returns are unsupported: return an owned type instead",
                 ));
+            }
+            if let Some(trait_name) = extract_trait_object_name(reference.elem.as_ref()) {
+                return Ok(Type::Class(trait_name));
             }
             match reference.elem.as_ref() {
                 syn::Type::Path(path) if path.qself.is_none() && path.path.is_ident("str") => {
@@ -577,9 +628,26 @@ fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
         if is_return {
             "unsupported export return type: use bool, i8/i16/i32/i64, f32/f64, String, Vec<u8/i32/i64/f32/f64/bool/String>, Option<T>, Result<T, E>, enums, models, classes, or ()"
         } else {
-            "unsupported export parameter type: use bool, i8/i16/i32/i64, f32/f64, String, &str, Vec/&[u8/i32/i64/f32/f64/bool/String], Option<T>, enums, models, or classes"
+            "unsupported export parameter type: use bool, i8/i16/i32/i64, f32/f64, String, &str, Vec/&[u8/i32/i64/f32/f64/bool/String], Option<T>, enums, models, classes, or callbacks"
         },
     ))
+}
+
+fn extract_trait_object_name(elem: &syn::Type) -> Option<String> {
+    if let syn::Type::TraitObject(trait_obj) = elem {
+        for bound in &trait_obj.bounds {
+            let syn::TypeParamBound::Trait(trait_bound) = bound else {
+                continue;
+            };
+            if let Some(segment) = trait_bound.path.segments.last() {
+                let name = segment.ident.to_string();
+                if name != "Send" && name != "Sync" && name != "Any" {
+                    return Some(name);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn is_class(attribute: &syn::Attribute) -> bool {
@@ -605,17 +673,31 @@ fn is_model(attribute: &syn::Attribute) -> bool {
                 || attribute.path().segments[1].ident == "kotlin_data"))
 }
 
-fn resolve_type(ty: &mut Type, enum_names: &HashSet<String>, model_names: &HashSet<String>) {
+fn is_callback(attribute: &syn::Attribute) -> bool {
+    attribute.path().is_ident("kotlin_callback")
+        || (attribute.path().segments.len() == 2
+            && attribute.path().segments[0].ident == "ketox"
+            && attribute.path().segments[1].ident == "kotlin_callback")
+}
+
+fn resolve_type(
+    ty: &mut Type,
+    enum_names: &HashSet<String>,
+    model_names: &HashSet<String>,
+    callback_names: &HashSet<String>,
+) {
     match ty {
         Type::Class(name) => {
-            if enum_names.contains(name) {
+            if callback_names.contains(name) {
+                *ty = Type::Callback(name.clone());
+            } else if enum_names.contains(name) {
                 *ty = Type::Enum(name.clone());
             } else if model_names.contains(name) {
                 *ty = Type::Model(name.clone());
             }
         }
-        Type::Option(inner) => resolve_type(inner, enum_names, model_names),
-        Type::Result { ok, .. } => resolve_type(ok, enum_names, model_names),
+        Type::Option(inner) => resolve_type(inner, enum_names, model_names, callback_names),
+        Type::Result { ok, .. } => resolve_type(ok, enum_names, model_names, callback_names),
         _ => {}
     }
 }
@@ -659,9 +741,10 @@ pub fn parse_source(
     let mut functions = Vec::new();
     let mut classes_map: std::collections::BTreeMap<String, Class> =
         std::collections::BTreeMap::new();
-    let mut enums_map: std::collections::BTreeMap<String, Enum> =
-        std::collections::BTreeMap::new();
+    let mut enums_map: std::collections::BTreeMap<String, Enum> = std::collections::BTreeMap::new();
     let mut models_map: std::collections::BTreeMap<String, Model> =
+        std::collections::BTreeMap::new();
+    let mut callbacks_map: std::collections::BTreeMap<String, Callback> =
         std::collections::BTreeMap::new();
     let mut nested = NestedExportDetector::default();
     for attribute in &file.attrs {
@@ -702,8 +785,9 @@ pub fn parse_source(
                                 .map_err(|e| syn::Error::new_spanned(field_ident, e).to_string())?;
                             let kt_field_name = kotlin_function_name(&rust_field_name)
                                 .map_err(|e| syn::Error::new_spanned(field_ident, e).to_string())?;
-                            let ty = parse_type(&field.ty, false)
-                                .map_err(|e| syn::Error::new_spanned(&field.ty, e.to_string()).to_string())?;
+                            let ty = parse_type(&field.ty, false).map_err(|e| {
+                                syn::Error::new_spanned(&field.ty, e.to_string()).to_string()
+                            })?;
                             fields.push(Field {
                                 rust_name: rust_field_name,
                                 kotlin_name: kt_field_name,
@@ -746,12 +830,16 @@ pub fn parse_source(
                             for field in &named.named {
                                 let field_ident = field.ident.as_ref().unwrap();
                                 let rust_field_name = field_ident.to_string();
-                                validate_rust_identifier(&rust_field_name, "field name")
-                                    .map_err(|e| syn::Error::new_spanned(field_ident, e).to_string())?;
+                                validate_rust_identifier(&rust_field_name, "field name").map_err(
+                                    |e| syn::Error::new_spanned(field_ident, e).to_string(),
+                                )?;
                                 let kt_field_name = kotlin_function_name(&rust_field_name)
-                                    .map_err(|e| syn::Error::new_spanned(field_ident, e).to_string())?;
-                                let ty = parse_type(&field.ty, false)
-                                    .map_err(|e| syn::Error::new_spanned(&field.ty, e.to_string()).to_string())?;
+                                    .map_err(|e| {
+                                        syn::Error::new_spanned(field_ident, e).to_string()
+                                    })?;
+                                let ty = parse_type(&field.ty, false).map_err(|e| {
+                                    syn::Error::new_spanned(&field.ty, e.to_string()).to_string()
+                                })?;
                                 fields.push(Field {
                                     rust_name: rust_field_name,
                                     kotlin_name: kt_field_name,
@@ -767,8 +855,9 @@ pub fn parse_source(
                                 } else {
                                     format!("v{idx}")
                                 };
-                                let ty = parse_type(&field.ty, false)
-                                    .map_err(|e| syn::Error::new_spanned(&field.ty, e.to_string()).to_string())?;
+                                let ty = parse_type(&field.ty, false).map_err(|e| {
+                                    syn::Error::new_spanned(&field.ty, e.to_string()).to_string()
+                                })?;
                                 fields.push(Field {
                                     rust_name: idx.to_string(),
                                     kotlin_name: name,
@@ -934,54 +1023,182 @@ pub fn parse_source(
                 );
                 nested.visit_block(&function.block);
             }
+            syn::Item::Trait(item_trait) if item_trait.attrs.iter().any(is_callback) => {
+                let rust_name = item_trait.ident.to_string();
+                validate_rust_identifier(&rust_name, "callback name")
+                    .map_err(|e| syn::Error::new_spanned(&item_trait.ident, e).to_string())?;
+                let kotlin_name = rust_name.clone();
+                validate_kotlin_identifier(&kotlin_name, "callback name")
+                    .map_err(|e| syn::Error::new_spanned(&item_trait.ident, e).to_string())?;
+                let mut methods = Vec::new();
+                for item in &item_trait.items {
+                    if let syn::TraitItem::Fn(method) = item {
+                        if method.sig.asyncness.is_some() {
+                            return Err(format!(
+                                "callback trait `{rust_name}`: async methods are unsupported"
+                            ));
+                        }
+                        if method.sig.unsafety.is_some() {
+                            return Err(format!(
+                                "callback trait `{rust_name}`: unsafe methods are unsupported"
+                            ));
+                        }
+                        if !method.sig.generics.params.is_empty()
+                            || method.sig.generics.where_clause.is_some()
+                        {
+                            return Err(format!(
+                                "callback trait `{rust_name}`: generic methods are unsupported"
+                            ));
+                        }
+                        let first_arg = method.sig.inputs.first();
+                        let Some(syn::FnArg::Receiver(receiver)) = first_arg else {
+                            return Err(format!(
+                                "callback method `{}` in `{rust_name}`: first parameter must be &self",
+                                method.sig.ident
+                            ));
+                        };
+                        if receiver.reference.is_none() || receiver.mutability.is_some() {
+                            return Err(format!(
+                                "callback method `{}` in `{rust_name}`: receiver must be immutable `&self`",
+                                method.sig.ident
+                            ));
+                        }
+                        let method_rust_name = method.sig.ident.to_string();
+                        let method_kotlin_name =
+                            kotlin_function_name(&method_rust_name).map_err(|e| {
+                                syn::Error::new_spanned(&method.sig.ident, e).to_string()
+                            })?;
+                        let mut params = Vec::new();
+                        for arg in method.sig.inputs.iter().skip(1) {
+                            let syn::FnArg::Typed(typed) = arg else {
+                                continue;
+                            };
+                            let syn::Pat::Ident(pat) = typed.pat.as_ref() else {
+                                return Err(
+                                    "callback method parameter pattern must be simple identifier"
+                                        .to_string(),
+                                );
+                            };
+                            let name = pat.ident.to_string();
+                            let ty = parse_type(&typed.ty, false).map_err(|e| {
+                                format!(
+                                    "callback method `{}` parameter `{}`: {e}",
+                                    method_rust_name, name
+                                )
+                            })?;
+                            params.push(Parameter { name, ty });
+                        }
+                        let return_type = match &method.sig.output {
+                            syn::ReturnType::Default => Type::Unit,
+                            syn::ReturnType::Type(_, ty) => parse_type(ty, true).map_err(|e| {
+                                format!("callback method `{}` return type: {e}", method_rust_name)
+                            })?,
+                        };
+                        methods.push(CallbackMethod {
+                            rust_name: method_rust_name,
+                            kotlin_name: method_kotlin_name,
+                            parameters: params,
+                            return_type,
+                        });
+                    }
+                }
+                if methods.is_empty() {
+                    return Err(format!(
+                        "callback trait `{rust_name}` must declare at least one method"
+                    ));
+                }
+                callbacks_map.insert(
+                    rust_name.clone(),
+                    Callback {
+                        rust_name,
+                        kotlin_name,
+                        methods,
+                    },
+                );
+            }
             other => nested.visit_item(other),
         }
     }
     if let Some(error) = nested.error {
         return Err(error.to_string());
     }
-    if !functions.is_empty() || !classes_map.is_empty() || !enums_map.is_empty() || !models_map.is_empty() {
+    if !functions.is_empty()
+        || !classes_map.is_empty()
+        || !enums_map.is_empty()
+        || !models_map.is_empty()
+        || !callbacks_map.is_empty()
+    {
         reject_configuration(&file.attrs).map_err(|error| error.to_string())?;
     }
 
     let enum_names: HashSet<String> = enums_map.keys().cloned().collect();
     let model_names: HashSet<String> = models_map.keys().cloned().collect();
+    let callback_names: HashSet<String> = callbacks_map.keys().cloned().collect();
 
-    // Resolve Type candidate references in functions, classes, enums, models
+    // Resolve Type candidate references in functions, classes, enums, models, callbacks
     for function in &mut functions {
         for param in &mut function.parameters {
-            resolve_type(&mut param.ty, &enum_names, &model_names);
+            resolve_type(&mut param.ty, &enum_names, &model_names, &callback_names);
         }
-        resolve_type(&mut function.return_type, &enum_names, &model_names);
+        resolve_type(
+            &mut function.return_type,
+            &enum_names,
+            &model_names,
+            &callback_names,
+        );
     }
     for class in classes_map.values_mut() {
         for constructor in &mut class.constructors {
             for param in &mut constructor.parameters {
-                resolve_type(&mut param.ty, &enum_names, &model_names);
+                resolve_type(&mut param.ty, &enum_names, &model_names, &callback_names);
             }
-            resolve_type(&mut constructor.return_type, &enum_names, &model_names);
+            resolve_type(
+                &mut constructor.return_type,
+                &enum_names,
+                &model_names,
+                &callback_names,
+            );
         }
         for method in &mut class.methods {
             for param in &mut method.parameters {
-                resolve_type(&mut param.ty, &enum_names, &model_names);
+                resolve_type(&mut param.ty, &enum_names, &model_names, &callback_names);
             }
-            resolve_type(&mut method.return_type, &enum_names, &model_names);
+            resolve_type(
+                &mut method.return_type,
+                &enum_names,
+                &model_names,
+                &callback_names,
+            );
         }
     }
 
     let mut enums = enums_map.into_values().collect::<Vec<_>>();
     let mut models = models_map.into_values().collect::<Vec<_>>();
+    let mut callbacks = callbacks_map.into_values().collect::<Vec<_>>();
 
     for enum_def in &mut enums {
         for variant in &mut enum_def.variants {
             for field in &mut variant.fields {
-                resolve_type(&mut field.ty, &enum_names, &model_names);
+                resolve_type(&mut field.ty, &enum_names, &model_names, &callback_names);
             }
         }
     }
     for model in &mut models {
         for field in &mut model.fields {
-            resolve_type(&mut field.ty, &enum_names, &model_names);
+            resolve_type(&mut field.ty, &enum_names, &model_names, &callback_names);
+        }
+    }
+    for callback in &mut callbacks {
+        for method in &mut callback.methods {
+            for param in &mut method.parameters {
+                resolve_type(&mut param.ty, &enum_names, &model_names, &callback_names);
+            }
+            resolve_type(
+                &mut method.return_type,
+                &enum_names,
+                &model_names,
+                &callback_names,
+            );
         }
     }
 
@@ -996,6 +1213,12 @@ pub fn parse_source(
     classes.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
     enums.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
     models.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
+    for callback in &mut callbacks {
+        callback
+            .methods
+            .sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
+    }
+    callbacks.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
 
     let module = Module {
         schema_version: SCHEMA_VERSION,
@@ -1006,6 +1229,7 @@ pub fn parse_source(
         classes,
         enums,
         models,
+        callbacks,
     };
     validate_module(&module)?;
     Ok(module)
@@ -1018,10 +1242,11 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
     if module.schema_version != 1
         && module.schema_version != 2
         && module.schema_version != 3
+        && module.schema_version != 4
         && module.schema_version != SCHEMA_VERSION
     {
         return Err(format!(
-            "unsupported metadata schema version {}; expected 1, 2, 3, or {SCHEMA_VERSION}",
+            "unsupported metadata schema version {}; expected 1, 2, 3, 4, or {SCHEMA_VERSION}",
             module.schema_version
         ));
     }
@@ -1052,6 +1277,7 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
                 &module.classes,
                 &module.enums,
                 &module.models,
+                &module.callbacks,
                 &function.rust_name,
             )?;
         }
@@ -1060,6 +1286,7 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
             &module.classes,
             &module.enums,
             &module.models,
+            &module.callbacks,
             &function.rust_name,
         )?;
     }
@@ -1081,6 +1308,7 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
                     &module.classes,
                     &module.enums,
                     &module.models,
+                    &module.callbacks,
                     &constructor.rust_name,
                 )?;
             }
@@ -1089,6 +1317,7 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
                 &module.classes,
                 &module.enums,
                 &module.models,
+                &module.callbacks,
                 &constructor.rust_name,
             )?;
         }
@@ -1099,6 +1328,7 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
                     &module.classes,
                     &module.enums,
                     &module.models,
+                    &module.callbacks,
                     &method.rust_name,
                 )?;
             }
@@ -1107,6 +1337,7 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
                 &module.classes,
                 &module.enums,
                 &module.models,
+                &module.callbacks,
                 &method.rust_name,
             )?;
         }
@@ -1129,6 +1360,7 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
                     &module.classes,
                     &module.enums,
                     &module.models,
+                    &module.callbacks,
                     &format!("{}::{}", enum_def.rust_name, variant.rust_name),
                 )?;
             }
@@ -1151,7 +1383,40 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
                 &module.classes,
                 &module.enums,
                 &module.models,
+                &module.callbacks,
                 &model.rust_name,
+            )?;
+        }
+    }
+    for callback in &module.callbacks {
+        validate_callback(callback)?;
+        if !rust_names.insert(&callback.rust_name) {
+            return Err(format!("duplicate exported item `{}`", callback.rust_name));
+        }
+        if !kotlin_names.insert(&callback.kotlin_name) {
+            return Err(format!(
+                "exported items collide on Kotlin name `{}`",
+                callback.kotlin_name
+            ));
+        }
+        for method in &callback.methods {
+            for param in &method.parameters {
+                validate_type_reference(
+                    &param.ty,
+                    &module.classes,
+                    &module.enums,
+                    &module.models,
+                    &module.callbacks,
+                    &method.rust_name,
+                )?;
+            }
+            validate_type_reference(
+                &method.return_type,
+                &module.classes,
+                &module.enums,
+                &module.models,
+                &module.callbacks,
+                &method.rust_name,
             )?;
         }
     }
@@ -1233,6 +1498,7 @@ fn validate_type_reference(
     classes: &[Class],
     enums: &[Enum],
     models: &[Model],
+    callbacks: &[Callback],
     context: &str,
 ) -> Result<(), String> {
     match ty {
@@ -1260,10 +1526,70 @@ fn validate_type_reference(
             }
             Ok(())
         }
-        Type::Option(inner) => validate_type_reference(inner, classes, enums, models, context),
-        Type::Result { ok, .. } => validate_type_reference(ok, classes, enums, models, context),
+        Type::Callback(name) => {
+            if !callbacks.iter().any(|c| c.rust_name == *name) {
+                return Err(format!(
+                    "unrecognized callback `{name}` in `{context}`; exported callbacks must be defined in the same module"
+                ));
+            }
+            Ok(())
+        }
+        Type::Option(inner) => {
+            validate_type_reference(inner, classes, enums, models, callbacks, context)
+        }
+        Type::Result { ok, .. } => {
+            validate_type_reference(ok, classes, enums, models, callbacks, context)
+        }
         _ => Ok(()),
     }
+}
+
+fn validate_callback(callback: &Callback) -> Result<(), String> {
+    validate_kotlin_identifier(&callback.kotlin_name, "callback name")?;
+    validate_rust_identifier(&callback.rust_name, "callback name")?;
+    if callback.methods.is_empty() {
+        return Err(format!(
+            "callback `{}` must declare at least one method",
+            callback.rust_name
+        ));
+    }
+    let mut method_names = HashSet::new();
+    let mut method_kt_names = HashSet::new();
+    for method in &callback.methods {
+        let expected = kotlin_function_name(&method.rust_name)?;
+        if method.kotlin_name != expected {
+            return Err(format!(
+                "Kotlin name `{}` for Rust callback method `{}` must be `{expected}`",
+                method.kotlin_name, method.rust_name
+            ));
+        }
+        if !method_names.insert(&method.rust_name) {
+            return Err(format!(
+                "duplicate method `{}` in callback `{}`",
+                method.rust_name, callback.rust_name
+            ));
+        }
+        if !method_kt_names.insert(&method.kotlin_name) {
+            return Err(format!(
+                "methods collide on Kotlin name `{}` in callback `{}`",
+                method.kotlin_name, callback.rust_name
+            ));
+        }
+        let mut param_names = HashSet::new();
+        for param in &method.parameters {
+            validate_kotlin_identifier(&param.name, "parameter")?;
+            validate_rust_identifier(&param.name, "parameter")?;
+            if !param_names.insert(&param.name) {
+                return Err(format!(
+                    "duplicate parameter `{}` in callback method `{}`",
+                    param.name, method.rust_name
+                ));
+            }
+            validate_type_position(&param.ty, false, &method.rust_name)?;
+        }
+        validate_type_position(&method.return_type, true, &method.rust_name)?;
+    }
+    Ok(())
 }
 
 fn validate_class(class: &Class) -> Result<(), String> {
@@ -1414,6 +1740,16 @@ fn validate_type_position(ty: &Type, is_return: bool, func_name: &str) -> Result
         Type::Model(name) => {
             validate_rust_identifier(name, "model")?;
             validate_kotlin_identifier(name, "model")?;
+            Ok(())
+        }
+        Type::Callback(name) => {
+            if is_return {
+                return Err(format!(
+                    "callbacks cannot be returned from native function or method `{func_name}`"
+                ));
+            }
+            validate_rust_identifier(name, "callback")?;
+            validate_kotlin_identifier(name, "callback")?;
             Ok(())
         }
         _ => Ok(()),

@@ -7,11 +7,14 @@ This repository contains **ketox3** with completed:
 - **Phase 2**: Rich types, `Option<T>`, `Result<T, E>`, and primitive array slices
 - **Phase 3**: Rust Structs ↔ Kotlin Classes, thread-safe Handle Registry, and AutoCloseable object lifecycle
 - **Phase 4**: Enums, Sealed Classes / ADTs, Pass-by-Value Data Models, and String Collections
+- **Phase 5**: Callbacks & JVM Interaction: Rust calling Kotlin functions, interfaces, and lambdas with cross-thread execution
 
 The [full project design](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) describes the long-term vision; [ROADMAP.md](ROADMAP.md) tracks milestones and implementation progress.
 
 ```rust
-use ketox::{kotlin_class, kotlin_constructor, kotlin_enum, kotlin_export, kotlin_model};
+use ketox::{
+    kotlin_callback, kotlin_class, kotlin_constructor, kotlin_enum, kotlin_export, kotlin_model,
+};
 
 // Top-level exported functions
 #[kotlin_export]
@@ -76,6 +79,27 @@ impl Vector {
 pub fn filter_names(names: &[String], prefix: &str) -> Vec<String> {
     names.iter().filter(|n| n.starts_with(prefix)).cloned().collect()
 }
+
+// Single-method callback -> Kotlin fun interface (SAM trailing lambdas)
+#[kotlin_callback]
+pub trait ProgressListener {
+    fn on_progress(&self, current: i32, total: i32, message: String);
+}
+
+#[kotlin_export]
+pub fn download(url: String, listener: Box<dyn ProgressListener>) {
+    listener.on_progress(100, 100, format!("Downloaded {url}"));
+}
+
+// Cross-thread callback executed from background thread
+#[kotlin_export]
+pub fn run_in_background(listener: Box<dyn ProgressListener + Send + Sync + 'static>) {
+    std::thread::spawn(move || {
+        listener.on_progress(100, 100, "Background worker done".to_string());
+    })
+    .join()
+    .unwrap();
+}
 ```
 
 The generated Kotlin bindings provide:
@@ -97,14 +121,14 @@ println("Status: $status")
 // 3. Sealed classes / ADTs with exhaustive pattern matching
 val shape: Shape = Shape.Circle(5.0)
 val area = when (shape) {
-    is Shape.Circle -> Math.PI * shape.r0 * shape.r0
-    is Shape.Rectangle -> shape.w * shape.h
+    is Shape.Circle -> Math.PI * shape.radius * shape.radius
+    is Shape.Rectangle -> shape.width * shape.height
     is Shape.Point -> 0.0
 }
 println("Area: $area")
 
 // 4. Pass-by-value data models
-val user = UserProfile(1L, "alice", Status.Idle)
+val user = UserProfile(1L, "alice", null, Status.Idle)
 val updatedUser = user.copy(status = Status.Running)
 
 // 5. Stateful objects implement java.lang.AutoCloseable
@@ -121,6 +145,16 @@ Vector(3.0, 4.0).use { v1 ->
 // 6. Rich collections
 val filtered = RustApi.filterNames(arrayOf("apple", "banana", "apricot"), "ap")
 println(filtered.toList()) // [apple, apricot]
+
+// 7. Callbacks with idiomatic trailing lambdas (SAM conversion)
+RustApi.download("https://example.com/file") { current, total, msg ->
+    println("$current/$total: $msg")
+}
+
+// 8. Cross-thread callbacks from background worker threads
+RustApi.runInBackground { current, total, msg ->
+    println("From worker: $msg")
+}
 ```
 
 ## Run the example and tests
@@ -214,6 +248,7 @@ Both commands require the source, package, object name (`--class`), and library 
 - **Data-Bearing Enums / ADTs:** `#[kotlin_enum]` enums with payloads mapped to Kotlin `sealed class` with `data class` / `data object` variants for exhaustive pattern matching
 - **Data Models / Value Structs:** `#[kotlin_model]` (or `#[kotlin_data]`) structs mapped to Kotlin `data class`, supporting recursive nesting of models and enums
 - **Classes & Structs:** `#[kotlin_class]` structs, `#[kotlin_constructor]` associated functions, and `#[kotlin_export] impl` methods (`&self` and `&mut self`). Managed via thread-safe `Arc<RwLock<T>>` handle registry with safe double-close and stale handle protection.
+- **Callbacks & Lambdas:** `#[kotlin_callback]` traits mapped to Kotlin `fun interface` (single method SAM lambdas) and `interface` (multi-method), supported synchronously and across background threads (`std::thread::spawn`) with daemon thread lifecycle, zero reference leaks, and exception recovery.
 
 Rust snake_case function and method names become Kotlin lowerCamelCase names. Struct and enum names become PascalCase Kotlin types. Unsupported declarations and naming collisions produce diagnostics.
 
@@ -225,9 +260,9 @@ Rust panics are caught and reported as JVM exceptions when compiled with `panic 
 | --- | --- |
 | `crates/ketox` | User-facing facade, macros re-export, and prelude |
 | `crates/ketox-core` | Metadata, supported types, source validation, and naming |
-| `crates/ketox-macros` | Attribute macros (`#[kotlin_export]`, `#[kotlin_class]`, `#[kotlin_constructor]`, `#[kotlin_enum]`, `#[kotlin_model]`) |
+| `crates/ketox-macros` | Attribute macros (`#[kotlin_export]`, `#[kotlin_class]`, `#[kotlin_constructor]`, `#[kotlin_enum]`, `#[kotlin_model]`, `#[kotlin_callback]`) |
 | `crates/ketox-codegen` | Deterministic Kotlin, JNI Rust, and JSON generation |
-| `crates/ketox-jni` | String & collection conversion, panic boundary, and thread-safe handle registry |
+| `crates/ketox-jni` | String & collection conversion, panic boundary, thread-safe handle registry, and callback environment |
 | `crates/ketox-cli` | `ketox generate` and `ketox inspect` commands |
 | `examples/hello-world` | Build-script-driven native library with functions, classes, enums, and models |
 | `integration-tests/jvm` | End-to-end JVM checks (`-Xcheck:jni`) |
