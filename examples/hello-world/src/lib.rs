@@ -127,6 +127,96 @@ impl Vector {
     }
 }
 
+#[kotlin_enum]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Pending,
+    Active,
+    Completed,
+    Failed,
+}
+
+#[kotlin_enum]
+#[derive(Debug, Clone, PartialEq)]
+pub enum Shape {
+    Circle { radius: f64 },
+    Rectangle { width: f64, height: f64 },
+    Point,
+}
+
+#[kotlin_model]
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserProfile {
+    pub id: i64,
+    pub username: String,
+    pub email: Option<String>,
+    pub status: Status,
+}
+
+#[kotlin_model]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Canvas {
+    pub title: String,
+    pub shape: Shape,
+    pub status: Status,
+}
+
+#[kotlin_export]
+pub fn check_status(status: Status) -> Status {
+    match status {
+        Status::Pending => Status::Active,
+        Status::Active => Status::Completed,
+        Status::Completed => Status::Completed,
+        Status::Failed => Status::Pending,
+    }
+}
+
+#[kotlin_export]
+pub fn describe_shape(shape: Shape) -> String {
+    match shape {
+        Shape::Circle { radius } => format!("Circle({radius:.1})"),
+        Shape::Rectangle { width, height } => format!("Rect({width:.1}x{height:.1})"),
+        Shape::Point => "Point".to_owned(),
+    }
+}
+
+#[kotlin_export]
+pub fn make_circle(radius: f64) -> Shape {
+    Shape::Circle { radius }
+}
+
+#[kotlin_export]
+pub fn create_user(profile: UserProfile) -> UserProfile {
+    profile
+}
+
+#[kotlin_export]
+pub fn inspect_canvas(canvas: Canvas) -> String {
+    format!(
+        "Canvas '{}': {:?} with status {:?}",
+        canvas.title, canvas.shape, canvas.status
+    )
+}
+
+#[kotlin_export]
+pub fn filter_names(names: &[String], query: &str) -> Vec<String> {
+    names.iter().filter(|s| s.contains(query)).cloned().collect()
+}
+
+#[kotlin_export]
+pub fn opt_user(id: i64) -> Option<UserProfile> {
+    if id == 1 {
+        Some(UserProfile {
+            id: 1,
+            username: "admin".to_owned(),
+            email: Some("admin@example.com".to_owned()),
+            status: Status::Active,
+        })
+    } else {
+        None
+    }
+}
+
 include!(concat!(env!("OUT_DIR"), "/ketox_jni.rs"));
 
 #[cfg(test)]

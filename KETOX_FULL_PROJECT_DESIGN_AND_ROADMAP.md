@@ -1416,11 +1416,11 @@ Improve Kotlin-native API quality.
 
 ### Definition of Done
 
-- [ ] simple enums
-- [ ] data-bearing enums
-- [ ] sealed types
-- [ ] nested structures
-- [ ] deterministic serialization metadata
+- [x] simple enums
+- [x] data-bearing enums
+- [x] sealed types
+- [x] nested structures
+- [x] deterministic serialization metadata
 
 ### Suggested Release
 

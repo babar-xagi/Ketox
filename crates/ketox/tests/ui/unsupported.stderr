@@ -1,4 +1,4 @@
-error: unsupported export parameter type: use bool, i8/i16/i32/i64, f32/f64, String, &str, Vec/&[u8/i32/i64/f32/f64/bool], or Option<T>
+error: unsupported export parameter type: use bool, i8/i16/i32/i64, f32/f64, String, &str, Vec/&[u8/i32/i64/f32/f64/bool/String], Option<T>, enums, models, or classes
  --> tests/ui/unsupported.rs:4:23
   |
 4 | pub fn invalid(value: usize) -> i32 { value as i32 }

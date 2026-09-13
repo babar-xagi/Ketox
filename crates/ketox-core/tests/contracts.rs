@@ -386,3 +386,126 @@ fn parses_phase_three_exported_classes_and_methods() {
     assert!(class.methods[2].is_mut);
     assert_eq!(class.methods[2].jni_signature(), "(JD)V");
 }
+
+#[test]
+fn parses_phase_four_enums_models_and_collections() {
+    let module = source(
+        r#"
+        #[kotlin_enum]
+        pub enum Status {
+            Pending,
+            Active,
+            Completed,
+            Failed,
+        }
+
+        #[kotlin_enum]
+        pub enum Shape {
+            Circle { radius: f64 },
+            Rectangle { width: f64, height: f64 },
+            Point,
+        }
+
+        #[kotlin_model]
+        pub struct UserProfile {
+            pub id: i64,
+            pub username: String,
+            pub email: Option<String>,
+            pub status: Status,
+        }
+
+        #[kotlin_export]
+        pub fn check_status(status: Status) -> Status {
+            status
+        }
+
+        #[kotlin_export]
+        pub fn describe_shape(shape: Shape) -> String {
+            match shape {
+                Shape::Circle { radius } => format!("Circle: {radius}"),
+                Shape::Rectangle { width, height } => format!("Rect: {width}x{height}"),
+                Shape::Point => "Point".to_owned(),
+            }
+        }
+
+        #[kotlin_export]
+        pub fn create_user(profile: UserProfile) -> UserProfile {
+            profile
+        }
+
+        #[kotlin_export]
+        pub fn filter_names(names: &[String], query: &str) -> Vec<String> {
+            names.iter().filter(|s| s.contains(query)).cloned().collect()
+        }
+    "#,
+    )
+    .unwrap();
+
+    assert_eq!(module.schema_version, 4);
+    assert_eq!(module.enums.len(), 2);
+
+    let status_enum = module.enums.iter().find(|e| e.rust_name == "Status").unwrap();
+    assert!(status_enum.is_simple());
+    assert_eq!(status_enum.variants.len(), 4);
+    assert_eq!(status_enum.variants[0].rust_name, "Pending");
+    assert_eq!(status_enum.variants[1].rust_name, "Active");
+
+    let shape_enum = module.enums.iter().find(|e| e.rust_name == "Shape").unwrap();
+    assert!(!shape_enum.is_simple());
+    assert_eq!(shape_enum.variants.len(), 3);
+    assert_eq!(shape_enum.variants[0].rust_name, "Circle");
+    assert_eq!(shape_enum.variants[0].fields.len(), 1);
+    assert_eq!(shape_enum.variants[0].fields[0].rust_name, "radius");
+    assert_eq!(shape_enum.variants[0].fields[0].ty, Type::F64);
+    assert_eq!(shape_enum.variants[2].rust_name, "Point");
+    assert!(shape_enum.variants[2].fields.is_empty());
+
+    assert_eq!(module.models.len(), 1);
+    let user_model = &module.models[0];
+    assert_eq!(user_model.rust_name, "UserProfile");
+    assert_eq!(user_model.fields.len(), 4);
+    assert_eq!(user_model.fields[0].rust_name, "id");
+    assert_eq!(user_model.fields[0].ty, Type::I64);
+    assert_eq!(user_model.fields[1].rust_name, "username");
+    assert_eq!(user_model.fields[1].ty, Type::String);
+    assert_eq!(user_model.fields[2].rust_name, "email");
+    assert_eq!(user_model.fields[2].ty, Type::Option(Box::new(Type::String)));
+    assert_eq!(user_model.fields[3].rust_name, "status");
+    assert_eq!(user_model.fields[3].ty, Type::Enum("Status".to_owned()));
+
+    let check_status_fn = module.functions.iter().find(|f| f.rust_name == "check_status").unwrap();
+    assert_eq!(check_status_fn.parameters[0].ty, Type::Enum("Status".to_owned()));
+    assert_eq!(check_status_fn.return_type, Type::Enum("Status".to_owned()));
+
+    let filter_names_fn = module.functions.iter().find(|f| f.rust_name == "filter_names").unwrap();
+    assert_eq!(filter_names_fn.parameters[0].ty, Type::StringSlice);
+    assert_eq!(filter_names_fn.return_type, Type::StringArray);
+}
+
+#[test]
+fn rejects_phase_four_conflicts_and_unknown_types() {
+    // Unknown type in function parameter
+    let err = source("#[kotlin_export] pub fn bad(status: NoSuchEnum) {}").unwrap_err();
+    assert!(err.contains("unrecognized enum") || err.contains("unrecognized"));
+
+    // Duplicate variant name in enum
+    let err = source(r#"
+        #[kotlin_enum]
+        pub enum Status {
+            Active,
+            Active,
+        }
+    "#).unwrap_err();
+    assert!(err.contains("duplicate variant"));
+
+    // Empty enum
+    let err = source(r#"
+        #[kotlin_enum]
+        pub enum Empty {}
+    "#).unwrap_err();
+    assert!(err.contains("at least one variant"));
+
+    // Borrowed StringSlice return is rejected
+    let err = source("#[kotlin_export] pub fn bad() -> &[String] { todo!() }").unwrap_err();
+    assert!(err.contains("borrowed returns are unsupported"));
+}

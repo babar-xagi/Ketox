@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use syn::{spanned::Spanned, visit::Visit};
 
 /// The metadata version understood by this release.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +20,49 @@ pub struct Module {
     pub functions: Vec<Function>,
     #[serde(default)]
     pub classes: Vec<Class>,
+    #[serde(default)]
+    pub enums: Vec<Enum>,
+    #[serde(default)]
+    pub models: Vec<Model>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Enum {
+    pub rust_name: String,
+    pub kotlin_name: String,
+    pub variants: Vec<EnumVariant>,
+}
+
+impl Enum {
+    pub fn is_simple(&self) -> bool {
+        self.variants.iter().all(|v| v.fields.is_empty())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnumVariant {
+    pub rust_name: String,
+    pub kotlin_name: String,
+    #[serde(default)]
+    pub fields: Vec<Field>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Field {
+    pub rust_name: String,
+    pub kotlin_name: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Model {
+    pub rust_name: String,
+    pub kotlin_name: String,
+    pub fields: Vec<Field>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,7 +156,11 @@ pub enum Type {
     DoubleSlice,
     BooleanArray,
     BooleanSlice,
+    StringArray,
+    StringSlice,
     Class(String),
+    Enum(String),
+    Model(String),
     Option(Box<Type>),
     Result { ok: Box<Type>, err: String },
 }
@@ -137,7 +184,8 @@ impl Type {
             Self::FloatArray | Self::FloatSlice => "FloatArray".to_owned(),
             Self::DoubleArray | Self::DoubleSlice => "DoubleArray".to_owned(),
             Self::BooleanArray | Self::BooleanSlice => "BooleanArray".to_owned(),
-            Self::Class(name) => name.clone(),
+            Self::StringArray | Self::StringSlice => "Array<String>".to_owned(),
+            Self::Class(name) | Self::Enum(name) | Self::Model(name) => name.clone(),
             Self::Option(inner) => format!("{}?", inner.kotlin_type()),
             Self::Result { ok, .. } => ok.kotlin_type(),
         }
@@ -161,7 +209,9 @@ impl Type {
             Self::FloatArray | Self::FloatSlice => "[F".to_owned(),
             Self::DoubleArray | Self::DoubleSlice => "[D".to_owned(),
             Self::BooleanArray | Self::BooleanSlice => "[Z".to_owned(),
+            Self::StringArray | Self::StringSlice => "[Ljava/lang/String;".to_owned(),
             Self::Class(_) => "J".to_owned(),
+            Self::Enum(name) | Self::Model(name) => format!("L{name};"),
             Self::Option(inner) => match inner.as_ref() {
                 Self::Bool => "Ljava/lang/Boolean;".to_owned(),
                 Self::I8 => "Ljava/lang/Byte;".to_owned(),
@@ -177,7 +227,9 @@ impl Type {
                 Self::FloatArray | Self::FloatSlice => "[F".to_owned(),
                 Self::DoubleArray | Self::DoubleSlice => "[D".to_owned(),
                 Self::BooleanArray | Self::BooleanSlice => "[Z".to_owned(),
+                Self::StringArray | Self::StringSlice => "[Ljava/lang/String;".to_owned(),
                 Self::Class(_) => "Ljava/lang/Long;".to_owned(),
+                Self::Enum(name) | Self::Model(name) => format!("L{name};"),
                 _ => "Ljava/lang/Object;".to_owned(),
             },
             Self::Result { ok, .. } => ok.jni_signature(),
@@ -460,6 +512,7 @@ fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
                                 "f32" => return Ok(Type::FloatArray),
                                 "f64" => return Ok(Type::DoubleArray),
                                 "bool" => return Ok(Type::BooleanArray),
+                                "String" => return Ok(Type::StringArray),
                                 _ => {}
                             }
                         }
@@ -507,6 +560,7 @@ fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
                             "f32" => return Ok(Type::FloatSlice),
                             "f64" => return Ok(Type::DoubleSlice),
                             "bool" => return Ok(Type::BooleanSlice),
+                            "String" => return Ok(Type::StringSlice),
                             _ => {}
                         }
                     }
@@ -521,15 +575,49 @@ fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
     Err(syn::Error::new_spanned(
         ty,
         if is_return {
-            "unsupported export return type: use bool, i8/i16/i32/i64, f32/f64, String, Vec<u8/i32/i64/f32/f64/bool>, Option<T>, Result<T, E>, or ()"
+            "unsupported export return type: use bool, i8/i16/i32/i64, f32/f64, String, Vec<u8/i32/i64/f32/f64/bool/String>, Option<T>, Result<T, E>, enums, models, classes, or ()"
         } else {
-            "unsupported export parameter type: use bool, i8/i16/i32/i64, f32/f64, String, &str, Vec/&[u8/i32/i64/f32/f64/bool], or Option<T>"
+            "unsupported export parameter type: use bool, i8/i16/i32/i64, f32/f64, String, &str, Vec/&[u8/i32/i64/f32/f64/bool/String], Option<T>, enums, models, or classes"
         },
     ))
 }
 
 fn is_class(attribute: &syn::Attribute) -> bool {
-    matches!(attribute.path().get_ident(), Some(ident) if ident == "kotlin_class")
+    attribute.path().is_ident("kotlin_class")
+        || (attribute.path().segments.len() == 2
+            && attribute.path().segments[0].ident == "ketox"
+            && attribute.path().segments[1].ident == "kotlin_class")
+}
+
+fn is_enum(attribute: &syn::Attribute) -> bool {
+    attribute.path().is_ident("kotlin_enum")
+        || (attribute.path().segments.len() == 2
+            && attribute.path().segments[0].ident == "ketox"
+            && attribute.path().segments[1].ident == "kotlin_enum")
+}
+
+fn is_model(attribute: &syn::Attribute) -> bool {
+    attribute.path().is_ident("kotlin_model")
+        || attribute.path().is_ident("kotlin_data")
+        || (attribute.path().segments.len() == 2
+            && attribute.path().segments[0].ident == "ketox"
+            && (attribute.path().segments[1].ident == "kotlin_model"
+                || attribute.path().segments[1].ident == "kotlin_data"))
+}
+
+fn resolve_type(ty: &mut Type, enum_names: &HashSet<String>, model_names: &HashSet<String>) {
+    match ty {
+        Type::Class(name) => {
+            if enum_names.contains(name) {
+                *ty = Type::Enum(name.clone());
+            } else if model_names.contains(name) {
+                *ty = Type::Model(name.clone());
+            }
+        }
+        Type::Option(inner) => resolve_type(inner, enum_names, model_names),
+        Type::Result { ok, .. } => resolve_type(ok, enum_names, model_names),
+        _ => {}
+    }
 }
 
 #[derive(Default)]
@@ -571,6 +659,10 @@ pub fn parse_source(
     let mut functions = Vec::new();
     let mut classes_map: std::collections::BTreeMap<String, Class> =
         std::collections::BTreeMap::new();
+    let mut enums_map: std::collections::BTreeMap<String, Enum> =
+        std::collections::BTreeMap::new();
+    let mut models_map: std::collections::BTreeMap<String, Model> =
+        std::collections::BTreeMap::new();
     let mut nested = NestedExportDetector::default();
     for attribute in &file.attrs {
         nested.visit_attribute(attribute);
@@ -592,6 +684,113 @@ pub fn parse_source(
                         constructors: Vec::new(),
                         methods: Vec::new(),
                     });
+            }
+            syn::Item::Struct(item_struct) if item_struct.attrs.iter().any(is_model) => {
+                let rust_name = item_struct.ident.to_string();
+                validate_rust_identifier(&rust_name, "model name")
+                    .map_err(|e| syn::Error::new_spanned(&item_struct.ident, e).to_string())?;
+                let kotlin_name = rust_name.clone();
+                validate_kotlin_identifier(&kotlin_name, "model name")
+                    .map_err(|e| syn::Error::new_spanned(&item_struct.ident, e).to_string())?;
+                let mut fields = Vec::new();
+                match &item_struct.fields {
+                    syn::Fields::Named(named) => {
+                        for field in &named.named {
+                            let field_ident = field.ident.as_ref().unwrap();
+                            let rust_field_name = field_ident.to_string();
+                            validate_rust_identifier(&rust_field_name, "field name")
+                                .map_err(|e| syn::Error::new_spanned(field_ident, e).to_string())?;
+                            let kt_field_name = kotlin_function_name(&rust_field_name)
+                                .map_err(|e| syn::Error::new_spanned(field_ident, e).to_string())?;
+                            let ty = parse_type(&field.ty, false)
+                                .map_err(|e| syn::Error::new_spanned(&field.ty, e.to_string()).to_string())?;
+                            fields.push(Field {
+                                rust_name: rust_field_name,
+                                kotlin_name: kt_field_name,
+                                ty,
+                            });
+                        }
+                    }
+                    _ => {
+                        return Err(format!("model struct `{rust_name}` must have named fields"));
+                    }
+                }
+                models_map.insert(
+                    rust_name.clone(),
+                    Model {
+                        rust_name,
+                        kotlin_name,
+                        fields,
+                    },
+                );
+            }
+            syn::Item::Enum(item_enum) if item_enum.attrs.iter().any(is_enum) => {
+                let rust_name = item_enum.ident.to_string();
+                validate_rust_identifier(&rust_name, "enum name")
+                    .map_err(|e| syn::Error::new_spanned(&item_enum.ident, e).to_string())?;
+                let kotlin_name = rust_name.clone();
+                validate_kotlin_identifier(&kotlin_name, "enum name")
+                    .map_err(|e| syn::Error::new_spanned(&item_enum.ident, e).to_string())?;
+                let mut variants = Vec::new();
+                for variant in &item_enum.variants {
+                    let var_rust_name = variant.ident.to_string();
+                    validate_rust_identifier(&var_rust_name, "variant name")
+                        .map_err(|e| syn::Error::new_spanned(&variant.ident, e).to_string())?;
+                    let var_kotlin_name = var_rust_name.clone();
+                    validate_kotlin_identifier(&var_kotlin_name, "variant name")
+                        .map_err(|e| syn::Error::new_spanned(&variant.ident, e).to_string())?;
+                    let mut fields = Vec::new();
+                    match &variant.fields {
+                        syn::Fields::Unit => {}
+                        syn::Fields::Named(named) => {
+                            for field in &named.named {
+                                let field_ident = field.ident.as_ref().unwrap();
+                                let rust_field_name = field_ident.to_string();
+                                validate_rust_identifier(&rust_field_name, "field name")
+                                    .map_err(|e| syn::Error::new_spanned(field_ident, e).to_string())?;
+                                let kt_field_name = kotlin_function_name(&rust_field_name)
+                                    .map_err(|e| syn::Error::new_spanned(field_ident, e).to_string())?;
+                                let ty = parse_type(&field.ty, false)
+                                    .map_err(|e| syn::Error::new_spanned(&field.ty, e.to_string()).to_string())?;
+                                fields.push(Field {
+                                    rust_name: rust_field_name,
+                                    kotlin_name: kt_field_name,
+                                    ty,
+                                });
+                            }
+                        }
+                        syn::Fields::Unnamed(unnamed) => {
+                            let count = unnamed.unnamed.len();
+                            for (idx, field) in unnamed.unnamed.iter().enumerate() {
+                                let name = if count == 1 {
+                                    "value".to_string()
+                                } else {
+                                    format!("v{idx}")
+                                };
+                                let ty = parse_type(&field.ty, false)
+                                    .map_err(|e| syn::Error::new_spanned(&field.ty, e.to_string()).to_string())?;
+                                fields.push(Field {
+                                    rust_name: idx.to_string(),
+                                    kotlin_name: name,
+                                    ty,
+                                });
+                            }
+                        }
+                    }
+                    variants.push(EnumVariant {
+                        rust_name: var_rust_name,
+                        kotlin_name: var_kotlin_name,
+                        fields,
+                    });
+                }
+                enums_map.insert(
+                    rust_name.clone(),
+                    Enum {
+                        rust_name,
+                        kotlin_name,
+                        variants,
+                    },
+                );
             }
             syn::Item::Impl(item_impl) if item_impl.attrs.iter().any(is_export) => {
                 let syn::Type::Path(self_path) = item_impl.self_ty.as_ref() else {
@@ -741,9 +940,51 @@ pub fn parse_source(
     if let Some(error) = nested.error {
         return Err(error.to_string());
     }
-    if !functions.is_empty() || !classes_map.is_empty() {
+    if !functions.is_empty() || !classes_map.is_empty() || !enums_map.is_empty() || !models_map.is_empty() {
         reject_configuration(&file.attrs).map_err(|error| error.to_string())?;
     }
+
+    let enum_names: HashSet<String> = enums_map.keys().cloned().collect();
+    let model_names: HashSet<String> = models_map.keys().cloned().collect();
+
+    // Resolve Type candidate references in functions, classes, enums, models
+    for function in &mut functions {
+        for param in &mut function.parameters {
+            resolve_type(&mut param.ty, &enum_names, &model_names);
+        }
+        resolve_type(&mut function.return_type, &enum_names, &model_names);
+    }
+    for class in classes_map.values_mut() {
+        for constructor in &mut class.constructors {
+            for param in &mut constructor.parameters {
+                resolve_type(&mut param.ty, &enum_names, &model_names);
+            }
+            resolve_type(&mut constructor.return_type, &enum_names, &model_names);
+        }
+        for method in &mut class.methods {
+            for param in &mut method.parameters {
+                resolve_type(&mut param.ty, &enum_names, &model_names);
+            }
+            resolve_type(&mut method.return_type, &enum_names, &model_names);
+        }
+    }
+
+    let mut enums = enums_map.into_values().collect::<Vec<_>>();
+    let mut models = models_map.into_values().collect::<Vec<_>>();
+
+    for enum_def in &mut enums {
+        for variant in &mut enum_def.variants {
+            for field in &mut variant.fields {
+                resolve_type(&mut field.ty, &enum_names, &model_names);
+            }
+        }
+    }
+    for model in &mut models {
+        for field in &mut model.fields {
+            resolve_type(&mut field.ty, &enum_names, &model_names);
+        }
+    }
+
     functions.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
     let mut classes = classes_map.into_values().collect::<Vec<_>>();
     for class in &mut classes {
@@ -753,6 +994,9 @@ pub fn parse_source(
             .sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
     }
     classes.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
+    enums.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
+    models.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
+
     let module = Module {
         schema_version: SCHEMA_VERSION,
         package: package.to_owned(),
@@ -760,6 +1004,8 @@ pub fn parse_source(
         library_name: library_name.to_owned(),
         functions,
         classes,
+        enums,
+        models,
     };
     validate_module(&module)?;
     Ok(module)
@@ -771,10 +1017,11 @@ pub fn parse_source(
 pub fn validate_module(module: &Module) -> Result<(), String> {
     if module.schema_version != 1
         && module.schema_version != 2
+        && module.schema_version != 3
         && module.schema_version != SCHEMA_VERSION
     {
         return Err(format!(
-            "unsupported metadata schema version {}; expected 1, 2, or {SCHEMA_VERSION}",
+            "unsupported metadata schema version {}; expected 1, 2, 3, or {SCHEMA_VERSION}",
             module.schema_version
         ));
     }
@@ -800,9 +1047,21 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
             ));
         }
         for param in &function.parameters {
-            validate_class_reference(&param.ty, &module.classes, &function.rust_name)?;
+            validate_type_reference(
+                &param.ty,
+                &module.classes,
+                &module.enums,
+                &module.models,
+                &function.rust_name,
+            )?;
         }
-        validate_class_reference(&function.return_type, &module.classes, &function.rust_name)?;
+        validate_type_reference(
+            &function.return_type,
+            &module.classes,
+            &module.enums,
+            &module.models,
+            &function.rust_name,
+        )?;
     }
     for class in &module.classes {
         validate_class(class)?;
@@ -817,25 +1076,165 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
         }
         for constructor in &class.constructors {
             for param in &constructor.parameters {
-                validate_class_reference(&param.ty, &module.classes, &constructor.rust_name)?;
+                validate_type_reference(
+                    &param.ty,
+                    &module.classes,
+                    &module.enums,
+                    &module.models,
+                    &constructor.rust_name,
+                )?;
             }
-            validate_class_reference(
+            validate_type_reference(
                 &constructor.return_type,
                 &module.classes,
+                &module.enums,
+                &module.models,
                 &constructor.rust_name,
             )?;
         }
         for method in &class.methods {
             for param in &method.parameters {
-                validate_class_reference(&param.ty, &module.classes, &method.rust_name)?;
+                validate_type_reference(
+                    &param.ty,
+                    &module.classes,
+                    &module.enums,
+                    &module.models,
+                    &method.rust_name,
+                )?;
             }
-            validate_class_reference(&method.return_type, &module.classes, &method.rust_name)?;
+            validate_type_reference(
+                &method.return_type,
+                &module.classes,
+                &module.enums,
+                &module.models,
+                &method.rust_name,
+            )?;
+        }
+    }
+    for enum_def in &module.enums {
+        validate_enum(enum_def)?;
+        if !rust_names.insert(&enum_def.rust_name) {
+            return Err(format!("duplicate exported item `{}`", enum_def.rust_name));
+        }
+        if !kotlin_names.insert(&enum_def.kotlin_name) {
+            return Err(format!(
+                "exported items collide on Kotlin name `{}`",
+                enum_def.kotlin_name
+            ));
+        }
+        for variant in &enum_def.variants {
+            for field in &variant.fields {
+                validate_type_reference(
+                    &field.ty,
+                    &module.classes,
+                    &module.enums,
+                    &module.models,
+                    &format!("{}::{}", enum_def.rust_name, variant.rust_name),
+                )?;
+            }
+        }
+    }
+    for model in &module.models {
+        validate_model(model)?;
+        if !rust_names.insert(&model.rust_name) {
+            return Err(format!("duplicate exported item `{}`", model.rust_name));
+        }
+        if !kotlin_names.insert(&model.kotlin_name) {
+            return Err(format!(
+                "exported items collide on Kotlin name `{}`",
+                model.kotlin_name
+            ));
+        }
+        for field in &model.fields {
+            validate_type_reference(
+                &field.ty,
+                &module.classes,
+                &module.enums,
+                &module.models,
+                &model.rust_name,
+            )?;
         }
     }
     Ok(())
 }
 
-fn validate_class_reference(ty: &Type, classes: &[Class], context: &str) -> Result<(), String> {
+fn validate_enum(enum_def: &Enum) -> Result<(), String> {
+    validate_kotlin_identifier(&enum_def.kotlin_name, "enum name")?;
+    validate_rust_identifier(&enum_def.rust_name, "enum name")?;
+    if enum_def.variants.is_empty() {
+        return Err(format!(
+            "enum `{}` must have at least one variant",
+            enum_def.rust_name
+        ));
+    }
+    let mut var_rust_names = HashSet::new();
+    let mut var_kt_names = HashSet::new();
+    for variant in &enum_def.variants {
+        validate_kotlin_identifier(&variant.kotlin_name, "variant name")?;
+        validate_rust_identifier(&variant.rust_name, "variant name")?;
+        if !var_rust_names.insert(&variant.rust_name) {
+            return Err(format!(
+                "duplicate variant `{}` in enum `{}`",
+                variant.rust_name, enum_def.rust_name
+            ));
+        }
+        if !var_kt_names.insert(&variant.kotlin_name) {
+            return Err(format!(
+                "variants collide on Kotlin name `{}` in enum `{}`",
+                variant.kotlin_name, enum_def.rust_name
+            ));
+        }
+        let mut field_names = HashSet::new();
+        for field in &variant.fields {
+            validate_kotlin_identifier(&field.kotlin_name, "field")?;
+            validate_rust_identifier(&field.rust_name, "field")?;
+            if !field_names.insert(&field.kotlin_name) {
+                return Err(format!(
+                    "duplicate field `{}` in variant `{}` of enum `{}`",
+                    field.kotlin_name, variant.rust_name, enum_def.rust_name
+                ));
+            }
+            validate_type_position(
+                &field.ty,
+                false,
+                &format!("{}::{}", enum_def.rust_name, variant.rust_name),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_model(model: &Model) -> Result<(), String> {
+    validate_kotlin_identifier(&model.kotlin_name, "model name")?;
+    validate_rust_identifier(&model.rust_name, "model name")?;
+    if model.fields.is_empty() {
+        return Err(format!(
+            "model struct `{}` must have at least one field",
+            model.rust_name
+        ));
+    }
+    let mut field_names = HashSet::new();
+    for field in &model.fields {
+        validate_kotlin_identifier(&field.kotlin_name, "field")?;
+        validate_rust_identifier(&field.rust_name, "field")?;
+        if !field_names.insert(&field.kotlin_name) {
+            return Err(format!(
+                "duplicate field `{}` in model `{}`",
+                field.kotlin_name, model.rust_name
+            ));
+        }
+        validate_type_position(&field.ty, false, &model.rust_name)?;
+    }
+    Ok(())
+}
+
+fn validate_type_reference(
+    ty: &Type,
+    classes: &[Class],
+    enums: &[Enum],
+    models: &[Model],
+    context: &str,
+) -> Result<(), String> {
     match ty {
         Type::Class(name) => {
             if !classes.iter().any(|c| c.rust_name == *name) {
@@ -845,8 +1244,24 @@ fn validate_class_reference(ty: &Type, classes: &[Class], context: &str) -> Resu
             }
             Ok(())
         }
-        Type::Option(inner) => validate_class_reference(inner, classes, context),
-        Type::Result { ok, .. } => validate_class_reference(ok, classes, context),
+        Type::Enum(name) => {
+            if !enums.iter().any(|e| e.rust_name == *name) {
+                return Err(format!(
+                    "unrecognized enum `{name}` in `{context}`; exported enums must be defined in the same module"
+                ));
+            }
+            Ok(())
+        }
+        Type::Model(name) => {
+            if !models.iter().any(|m| m.rust_name == *name) {
+                return Err(format!(
+                    "unrecognized model `{name}` in `{context}`; exported models must be defined in the same module"
+                ));
+            }
+            Ok(())
+        }
+        Type::Option(inner) => validate_type_reference(inner, classes, enums, models, context),
+        Type::Result { ok, .. } => validate_type_reference(ok, classes, enums, models, context),
         _ => Ok(()),
     }
 }
@@ -947,6 +1362,7 @@ fn validate_type_position(ty: &Type, is_return: bool, func_name: &str) -> Result
         | Type::FloatSlice
         | Type::DoubleSlice
         | Type::BooleanSlice
+        | Type::StringSlice
             if is_return =>
         {
             Err(format!(
@@ -988,6 +1404,16 @@ fn validate_type_position(ty: &Type, is_return: bool, func_name: &str) -> Result
             }
             validate_rust_identifier(name, "class")?;
             validate_kotlin_identifier(name, "class")?;
+            Ok(())
+        }
+        Type::Enum(name) => {
+            validate_rust_identifier(name, "enum")?;
+            validate_kotlin_identifier(name, "enum")?;
+            Ok(())
+        }
+        Type::Model(name) => {
+            validate_rust_identifier(name, "model")?;
+            validate_kotlin_identifier(name, "model")?;
             Ok(())
         }
         _ => Ok(()),

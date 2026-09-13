@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use ketox_core::{Module, Type, parse_source, validate_module};
+use ketox_core::{Enum, Field, Model, Module, Type, parse_source, validate_module};
 
 /// All artifacts for one module. Their contents are stable for identical metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,14 +106,14 @@ fn generate_kotlin(module: &Module) -> String {
         let parameters = function
             .parameters
             .iter()
-            .map(|parameter| format!("{}: kotlin.{}", parameter.name, parameter.ty.kotlin_type()))
+            .map(|parameter| format!("{}: {}", parameter.name, render_kotlin_type(&parameter.ty)))
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(
             output,
-            "\n    external fun {}({parameters}): kotlin.{}",
+            "\n    external fun {}({parameters}): {}",
             function.kotlin_name,
-            function.return_type.kotlin_type()
+            render_kotlin_type(&function.return_type)
         )
         .unwrap();
     }
@@ -122,7 +122,7 @@ fn generate_kotlin(module: &Module) -> String {
             let parameters = constructor
                 .parameters
                 .iter()
-                .map(|p| format!("{}: kotlin.{}", p.name, kotlin_jni_type(&p.ty)))
+                .map(|p| format!("{}: {}", p.name, kotlin_jni_type(&p.ty)))
                 .collect::<Vec<_>>()
                 .join(", ");
             writeln!(
@@ -135,12 +135,12 @@ fn generate_kotlin(module: &Module) -> String {
         for method in &class.methods {
             let mut params = vec!["__ketox_handle: kotlin.Long".to_owned()];
             for p in &method.parameters {
-                params.push(format!("{}: kotlin.{}", p.name, kotlin_jni_type(&p.ty)));
+                params.push(format!("{}: {}", p.name, kotlin_jni_type(&p.ty)));
             }
             let param_str = params.join(", ");
             writeln!(
                 output,
-                "\n    external fun __ketox_{}_{}({param_str}): kotlin.{}",
+                "\n    external fun __ketox_{}_{}({param_str}): {}",
                 class.rust_name,
                 method.rust_name,
                 kotlin_jni_type(&method.return_type)
@@ -155,6 +155,52 @@ fn generate_kotlin(module: &Module) -> String {
         .unwrap();
     }
     output.push_str("}\n");
+
+    for enum_ in &module.enums {
+        if enum_.is_simple() {
+            writeln!(output, "\nenum class {} {{", enum_.kotlin_name).unwrap();
+            for variant in &enum_.variants {
+                writeln!(output, "    {},", variant.kotlin_name).unwrap();
+            }
+            writeln!(output, "}}").unwrap();
+        } else {
+            writeln!(output, "\nsealed class {} {{", enum_.kotlin_name).unwrap();
+            for variant in &enum_.variants {
+                if variant.fields.is_empty() {
+                    writeln!(
+                        output,
+                        "    data object {} : {}()",
+                        variant.kotlin_name, enum_.kotlin_name
+                    )
+                    .unwrap();
+                } else {
+                    let fields_str = variant
+                        .fields
+                        .iter()
+                        .map(|f| format!("val {}: {}", f.kotlin_name, render_kotlin_type(&f.ty)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(
+                        output,
+                        "    data class {}({}) : {}()",
+                        variant.kotlin_name, fields_str, enum_.kotlin_name
+                    )
+                    .unwrap();
+                }
+            }
+            writeln!(output, "}}").unwrap();
+        }
+    }
+
+    for model in &module.models {
+        let fields_str = model
+            .fields
+            .iter()
+            .map(|f| format!("val {}: {}", f.kotlin_name, render_kotlin_type(&f.ty)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(output, "\ndata class {}({})", model.kotlin_name, fields_str).unwrap();
+    }
 
     for class in &module.classes {
         writeln!(
@@ -260,19 +306,39 @@ fn generate_kotlin(module: &Module) -> String {
     output
 }
 
-fn kotlin_qualified_type(ty: &Type) -> String {
+fn render_kotlin_type(ty: &Type) -> String {
     match ty {
-        Type::Class(name) => name.clone(),
-        Type::Option(inner) => format!("{}?", kotlin_qualified_type(inner)),
-        _ => format!("kotlin.{}", ty.kotlin_type()),
+        Type::Bool => "kotlin.Boolean".to_owned(),
+        Type::I8 => "kotlin.Byte".to_owned(),
+        Type::I16 => "kotlin.Short".to_owned(),
+        Type::I32 => "kotlin.Int".to_owned(),
+        Type::I64 => "kotlin.Long".to_owned(),
+        Type::F32 => "kotlin.Float".to_owned(),
+        Type::F64 => "kotlin.Double".to_owned(),
+        Type::String | Type::Str => "kotlin.String".to_owned(),
+        Type::Unit => "kotlin.Unit".to_owned(),
+        Type::ByteArray | Type::ByteSlice => "kotlin.ByteArray".to_owned(),
+        Type::IntArray | Type::IntSlice => "kotlin.IntArray".to_owned(),
+        Type::LongArray | Type::LongSlice => "kotlin.LongArray".to_owned(),
+        Type::FloatArray | Type::FloatSlice => "kotlin.FloatArray".to_owned(),
+        Type::DoubleArray | Type::DoubleSlice => "kotlin.DoubleArray".to_owned(),
+        Type::BooleanArray | Type::BooleanSlice => "kotlin.BooleanArray".to_owned(),
+        Type::StringArray | Type::StringSlice => "kotlin.Array<kotlin.String>".to_owned(),
+        Type::Class(name) | Type::Enum(name) | Type::Model(name) => name.clone(),
+        Type::Option(inner) => format!("{}?", render_kotlin_type(inner)),
+        Type::Result { ok, .. } => render_kotlin_type(ok),
     }
+}
+
+fn kotlin_qualified_type(ty: &Type) -> String {
+    render_kotlin_type(ty)
 }
 
 fn kotlin_jni_type(ty: &Type) -> String {
     match ty {
-        Type::Class(_) => "Long".to_owned(),
+        Type::Class(_) => "kotlin.Long".to_owned(),
         Type::Result { ok, .. } => kotlin_jni_type(ok),
-        _ => ty.kotlin_type(),
+        _ => render_kotlin_type(ty),
     }
 }
 
@@ -280,6 +346,14 @@ fn generate_rust(module: &Module) -> String {
     let class_path = format!("{}/{}", module.package.replace('.', "/"), module.class_name);
     let class_symbol = jni_escape(&class_path);
     let mut output = String::from("// Generated by Ketox. Do not edit.\n");
+
+    for enum_ in &module.enums {
+        generate_enum_helpers(enum_, module, &mut output);
+    }
+    for model in &module.models {
+        generate_model_helpers(model, module, &mut output);
+    }
+
     for function in &module.functions {
         let symbol = format!(
             "Java_{}_{}",
@@ -649,6 +723,38 @@ fn generate_argument_conversion(
             .unwrap();
             format!("__ketox_value_{index}.as_slice()")
         }
+        Type::StringArray => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_string_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
+        Type::StringSlice => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = ::ketox::runtime::read_string_vec(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}.as_slice()")
+        }
+        Type::Enum(name) => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = __ketox_read_enum_{name}(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
+        Type::Model(name) => {
+            writeln!(
+                output,
+                "        let __ketox_value_{index} = __ketox_read_model_{name}(__ketox_env, &{argument})?;"
+            )
+            .unwrap();
+            format!("__ketox_value_{index}")
+        }
         Type::Option(inner) => match inner.as_ref() {
             Type::String => {
                 writeln!(
@@ -818,6 +924,38 @@ fn generate_argument_conversion(
                 .unwrap();
                 format!("__ketox_value_{index}.as_deref()")
             }
+            Type::StringArray => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_string_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::StringSlice => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = ::ketox::runtime::read_opt_string_vec(__ketox_env, &{argument})?;"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}.as_deref()")
+            }
+            Type::Enum(name) => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = if {argument}.is_null() {{ None }} else {{ Some(__ketox_read_enum_{name}(__ketox_env, &{argument})?) }};"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
+            Type::Model(name) => {
+                writeln!(
+                    output,
+                    "        let __ketox_value_{index} = if {argument}.is_null() {{ None }} else {{ Some(__ketox_read_model_{name}(__ketox_env, &{argument})?) }};"
+                )
+                .unwrap();
+                format!("__ketox_value_{index}")
+            }
             _ => argument.to_owned(),
         },
         Type::Class(class_name) => {
@@ -859,6 +997,15 @@ fn generate_return_conversion(ty: &Type, expr: &str) -> String {
         }
         Type::BooleanArray | Type::BooleanSlice => {
             format!("::ketox::runtime::write_boolean_array(__ketox_env, &{expr})")
+        }
+        Type::StringArray | Type::StringSlice => {
+            format!("::ketox::runtime::write_string_array(__ketox_env, ({expr}).as_slice())")
+        }
+        Type::Enum(name) => {
+            format!("__ketox_write_enum_{name}(__ketox_env, &{expr})")
+        }
+        Type::Model(name) => {
+            format!("__ketox_write_model_{name}(__ketox_env, &{expr})")
         }
         Type::Class(_) => format!("Ok(::ketox::runtime::register_handle({expr}))"),
         Type::Option(inner) => match inner.as_ref() {
@@ -904,6 +1051,15 @@ fn generate_return_conversion(ty: &Type, expr: &str) -> String {
             Type::BooleanArray | Type::BooleanSlice => {
                 format!("::ketox::runtime::write_opt_boolean_array(__ketox_env, {expr})")
             }
+            Type::StringArray | Type::StringSlice => {
+                format!("::ketox::runtime::write_opt_string_array(__ketox_env, ({expr}).as_deref())")
+            }
+            Type::Enum(name) => {
+                format!("match {expr} {{\n            Some(ref __inner) => __ketox_write_enum_{name}(__ketox_env, __inner),\n            None => Ok(::std::ptr::null_mut()),\n        }}")
+            }
+            Type::Model(name) => {
+                format!("match {expr} {{\n            Some(ref __inner) => __ketox_write_model_{name}(__ketox_env, __inner),\n            None => Ok(::std::ptr::null_mut()),\n        }}")
+            }
             Type::Class(_) => {
                 format!(
                     "Ok(match {expr} {{\n                    Some(__ketox_inner) => ::ketox::runtime::register_handle(__ketox_inner),\n                    None => 0,\n                }})"
@@ -918,6 +1074,644 @@ fn generate_return_conversion(ty: &Type, expr: &str) -> String {
             )
         }
     }
+}
+
+fn jni_descriptor(ty: &Type, package: &str) -> String {
+    let pkg_path = package.replace('.', "/");
+    match ty {
+        Type::Bool => "Z".to_owned(),
+        Type::I8 => "B".to_owned(),
+        Type::I16 => "S".to_owned(),
+        Type::I32 => "I".to_owned(),
+        Type::I64 => "J".to_owned(),
+        Type::F32 => "F".to_owned(),
+        Type::F64 => "D".to_owned(),
+        Type::String | Type::Str => "Ljava/lang/String;".to_owned(),
+        Type::ByteArray | Type::ByteSlice => "[B".to_owned(),
+        Type::IntArray | Type::IntSlice => "[I".to_owned(),
+        Type::LongArray | Type::LongSlice => "[J".to_owned(),
+        Type::FloatArray | Type::FloatSlice => "[F".to_owned(),
+        Type::DoubleArray | Type::DoubleSlice => "[D".to_owned(),
+        Type::BooleanArray | Type::BooleanSlice => "[Z".to_owned(),
+        Type::StringArray | Type::StringSlice => "[Ljava/lang/String;".to_owned(),
+        Type::Class(_) => "J".to_owned(),
+        Type::Enum(name) | Type::Model(name) => format!("L{pkg_path}/{name};"),
+        Type::Option(inner) => match inner.as_ref() {
+            Type::Bool => "Ljava/lang/Boolean;".to_owned(),
+            Type::I8 => "Ljava/lang/Byte;".to_owned(),
+            Type::I16 => "Ljava/lang/Short;".to_owned(),
+            Type::I32 => "Ljava/lang/Integer;".to_owned(),
+            Type::I64 => "Ljava/lang/Long;".to_owned(),
+            Type::F32 => "Ljava/lang/Float;".to_owned(),
+            Type::F64 => "Ljava/lang/Double;".to_owned(),
+            Type::String | Type::Str => "Ljava/lang/String;".to_owned(),
+            Type::ByteArray | Type::ByteSlice => "[B".to_owned(),
+            Type::IntArray | Type::IntSlice => "[I".to_owned(),
+            Type::LongArray | Type::LongSlice => "[J".to_owned(),
+            Type::FloatArray | Type::FloatSlice => "[F".to_owned(),
+            Type::DoubleArray | Type::DoubleSlice => "[D".to_owned(),
+            Type::BooleanArray | Type::BooleanSlice => "[Z".to_owned(),
+            Type::StringArray | Type::StringSlice => "[Ljava/lang/String;".to_owned(),
+            Type::Class(_) => "Ljava/lang/Long;".to_owned(),
+            Type::Enum(name) | Type::Model(name) => format!("L{pkg_path}/{name};"),
+            _ => "Ljava/lang/Object;".to_owned(),
+        },
+        Type::Result { ok, .. } => jni_descriptor(ok, package),
+        Type::Unit => "V".to_owned(),
+    }
+}
+
+fn generate_field_read_statements(
+    field: &Field,
+    obj_expr: &str,
+    var_name: &str,
+    indent: &str,
+    module: &Module,
+    output: &mut String,
+) {
+    let kt_name = &field.kotlin_name;
+    let pkg_path = module.package.replace('.', "/");
+    match &field.ty {
+        Type::Bool => {
+            writeln!(output, "{indent}let {var_name} = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"Z\")?.z()? != 0;").unwrap();
+        }
+        Type::I8 => {
+            writeln!(output, "{indent}let {var_name} = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"B\")?.b()?;").unwrap();
+        }
+        Type::I16 => {
+            writeln!(output, "{indent}let {var_name} = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"S\")?.s()?;").unwrap();
+        }
+        Type::I32 => {
+            writeln!(output, "{indent}let {var_name} = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"I\")?.i()?;").unwrap();
+        }
+        Type::I64 => {
+            writeln!(output, "{indent}let {var_name} = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"J\")?.j()?;").unwrap();
+        }
+        Type::F32 => {
+            writeln!(output, "{indent}let {var_name} = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"F\")?.f()?;").unwrap();
+        }
+        Type::F64 => {
+            writeln!(output, "{indent}let {var_name} = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"D\")?.d()?;").unwrap();
+        }
+        Type::String | Type::Str => {
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"Ljava/lang/String;\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_string(__ketox_env, &::ketox::jni::objects::JString::from({var_name}_obj))?;").unwrap();
+        }
+        Type::ByteArray | Type::ByteSlice => {
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"[B\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_byte_vec(__ketox_env, &::ketox::jni::objects::JByteArray::from({var_name}_obj))?;").unwrap();
+        }
+        Type::IntArray | Type::IntSlice => {
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"[I\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_int_vec(__ketox_env, &::ketox::jni::objects::JIntArray::from({var_name}_obj))?;").unwrap();
+        }
+        Type::LongArray | Type::LongSlice => {
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"[J\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_long_vec(__ketox_env, &::ketox::jni::objects::JLongArray::from({var_name}_obj))?;").unwrap();
+        }
+        Type::FloatArray | Type::FloatSlice => {
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"[F\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_float_vec(__ketox_env, &::ketox::jni::objects::JFloatArray::from({var_name}_obj))?;").unwrap();
+        }
+        Type::DoubleArray | Type::DoubleSlice => {
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"[D\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_double_vec(__ketox_env, &::ketox::jni::objects::JDoubleArray::from({var_name}_obj))?;").unwrap();
+        }
+        Type::BooleanArray | Type::BooleanSlice => {
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"[Z\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_boolean_vec(__ketox_env, &::ketox::jni::objects::JBooleanArray::from({var_name}_obj))?;").unwrap();
+        }
+        Type::StringArray | Type::StringSlice => {
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"[Ljava/lang/String;\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_string_vec(__ketox_env, &::ketox::jni::objects::JObjectArray::from({var_name}_obj))?;").unwrap();
+        }
+        Type::Enum(name) => {
+            let sig = format!("L{pkg_path}/{name};");
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"{sig}\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = __ketox_read_enum_{name}(__ketox_env, &{var_name}_obj)?;").unwrap();
+        }
+        Type::Model(name) => {
+            let sig = format!("L{pkg_path}/{name};");
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"{sig}\")?.l()?;").unwrap();
+            writeln!(output, "{indent}let {var_name} = __ketox_read_model_{name}(__ketox_env, &{var_name}_obj)?;").unwrap();
+        }
+        Type::Option(inner) => {
+            let desc = jni_descriptor(&field.ty, &module.package);
+            writeln!(output, "{indent}let {var_name}_obj = __ketox_env.get_field({obj_expr}, \"{kt_name}\", \"{desc}\")?.l()?;").unwrap();
+            match inner.as_ref() {
+                Type::String | Type::Str => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_string(__ketox_env, &::ketox::jni::objects::JString::from({var_name}_obj))?;").unwrap();
+                }
+                Type::Bool => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_bool(__ketox_env, &{var_name}_obj)?;").unwrap();
+                }
+                Type::I8 => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_byte(__ketox_env, &{var_name}_obj)?;").unwrap();
+                }
+                Type::I16 => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_short(__ketox_env, &{var_name}_obj)?;").unwrap();
+                }
+                Type::I32 => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_int(__ketox_env, &{var_name}_obj)?;").unwrap();
+                }
+                Type::I64 => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_long(__ketox_env, &{var_name}_obj)?;").unwrap();
+                }
+                Type::F32 => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_float(__ketox_env, &{var_name}_obj)?;").unwrap();
+                }
+                Type::F64 => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_double(__ketox_env, &{var_name}_obj)?;").unwrap();
+                }
+                Type::ByteArray | Type::ByteSlice => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_byte_vec(__ketox_env, &::ketox::jni::objects::JByteArray::from({var_name}_obj))?;").unwrap();
+                }
+                Type::IntArray | Type::IntSlice => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_int_vec(__ketox_env, &::ketox::jni::objects::JIntArray::from({var_name}_obj))?;").unwrap();
+                }
+                Type::LongArray | Type::LongSlice => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_long_vec(__ketox_env, &::ketox::jni::objects::JLongArray::from({var_name}_obj))?;").unwrap();
+                }
+                Type::FloatArray | Type::FloatSlice => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_float_vec(__ketox_env, &::ketox::jni::objects::JFloatArray::from({var_name}_obj))?;").unwrap();
+                }
+                Type::DoubleArray | Type::DoubleSlice => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_double_vec(__ketox_env, &::ketox::jni::objects::JDoubleArray::from({var_name}_obj))?;").unwrap();
+                }
+                Type::BooleanArray | Type::BooleanSlice => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_boolean_vec(__ketox_env, &::ketox::jni::objects::JBooleanArray::from({var_name}_obj))?;").unwrap();
+                }
+                Type::StringArray | Type::StringSlice => {
+                    writeln!(output, "{indent}let {var_name} = ::ketox::runtime::read_opt_string_vec(__ketox_env, &::ketox::jni::objects::JObjectArray::from({var_name}_obj))?;").unwrap();
+                }
+                Type::Enum(name) => {
+                    writeln!(output, "{indent}let {var_name} = if {var_name}_obj.is_null() {{ None }} else {{ Some(__ketox_read_enum_{name}(__ketox_env, &{var_name}_obj)?) }};").unwrap();
+                }
+                Type::Model(name) => {
+                    writeln!(output, "{indent}let {var_name} = if {var_name}_obj.is_null() {{ None }} else {{ Some(__ketox_read_model_{name}(__ketox_env, &{var_name}_obj)?) }};").unwrap();
+                }
+                _ => {
+                    writeln!(output, "{indent}let {var_name} = None;").unwrap();
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn generate_field_write_statements(
+    field: &Field,
+    val_expr: &str,
+    jval_name: &str,
+    indent: &str,
+    _module: &Module,
+    output: &mut String,
+) {
+    match &field.ty {
+        Type::Bool => {
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(*{val_expr} as ::ketox::jni::sys::jboolean);").unwrap();
+        }
+        Type::I8 => {
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(*{val_expr} as ::ketox::jni::sys::jbyte);").unwrap();
+        }
+        Type::I16 => {
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(*{val_expr} as ::ketox::jni::sys::jshort);").unwrap();
+        }
+        Type::I32 => {
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(*{val_expr} as ::ketox::jni::sys::jint);").unwrap();
+        }
+        Type::I64 => {
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(*{val_expr} as ::ketox::jni::sys::jlong);").unwrap();
+        }
+        Type::F32 => {
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(*{val_expr} as ::ketox::jni::sys::jfloat);").unwrap();
+        }
+        Type::F64 => {
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(*{val_expr} as ::ketox::jni::sys::jdouble);").unwrap();
+        }
+        Type::String | Type::Str => {
+            writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_string(__ketox_env, {val_expr})?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::ByteArray | Type::ByteSlice => {
+            writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_byte_array(__ketox_env, ({val_expr}).as_slice())?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::IntArray | Type::IntSlice => {
+            writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_int_array(__ketox_env, ({val_expr}).as_slice())?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::LongArray | Type::LongSlice => {
+            writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_long_array(__ketox_env, ({val_expr}).as_slice())?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::FloatArray | Type::FloatSlice => {
+            writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_float_array(__ketox_env, ({val_expr}).as_slice())?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::DoubleArray | Type::DoubleSlice => {
+            writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_double_array(__ketox_env, ({val_expr}).as_slice())?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::BooleanArray | Type::BooleanSlice => {
+            writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_boolean_array(__ketox_env, ({val_expr}).as_slice())?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::StringArray | Type::StringSlice => {
+            writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_string_array(__ketox_env, ({val_expr}).as_slice())?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::Enum(name) => {
+            writeln!(output, "{indent}let {jval_name}_raw = __ketox_write_enum_{name}(__ketox_env, {val_expr})?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::Model(name) => {
+            writeln!(output, "{indent}let {jval_name}_raw = __ketox_write_model_{name}(__ketox_env, {val_expr})?;").unwrap();
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        Type::Option(inner) => {
+            match inner.as_ref() {
+                Type::String | Type::Str => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_string(__ketox_env, ({val_expr}).as_deref())?;").unwrap();
+                }
+                Type::Bool => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_bool(__ketox_env, *{val_expr})?;").unwrap();
+                }
+                Type::I8 => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_byte(__ketox_env, *{val_expr})?;").unwrap();
+                }
+                Type::I16 => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_short(__ketox_env, *{val_expr})?;").unwrap();
+                }
+                Type::I32 => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_int(__ketox_env, *{val_expr})?;").unwrap();
+                }
+                Type::I64 => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_long(__ketox_env, *{val_expr})?;").unwrap();
+                }
+                Type::F32 => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_float(__ketox_env, *{val_expr})?;").unwrap();
+                }
+                Type::F64 => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_double(__ketox_env, *{val_expr})?;").unwrap();
+                }
+                Type::ByteArray | Type::ByteSlice => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_byte_array(__ketox_env, ({val_expr}).as_deref())?;").unwrap();
+                }
+                Type::IntArray | Type::IntSlice => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_int_array(__ketox_env, ({val_expr}).as_deref())?;").unwrap();
+                }
+                Type::LongArray | Type::LongSlice => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_long_array(__ketox_env, ({val_expr}).as_deref())?;").unwrap();
+                }
+                Type::FloatArray | Type::FloatSlice => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_float_array(__ketox_env, ({val_expr}).as_deref())?;").unwrap();
+                }
+                Type::DoubleArray | Type::DoubleSlice => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_double_array(__ketox_env, ({val_expr}).as_deref())?;").unwrap();
+                }
+                Type::BooleanArray | Type::BooleanSlice => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_boolean_array(__ketox_env, ({val_expr}).as_deref())?;").unwrap();
+                }
+                Type::StringArray | Type::StringSlice => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::ketox::runtime::write_opt_string_array(__ketox_env, ({val_expr}).as_deref())?;").unwrap();
+                }
+                Type::Enum(name) => {
+                    writeln!(output, "{indent}let {jval_name}_raw = match {val_expr} {{ Some(ref __inner) => __ketox_write_enum_{name}(__ketox_env, __inner)?, None => ::std::ptr::null_mut() }};").unwrap();
+                }
+                Type::Model(name) => {
+                    writeln!(output, "{indent}let {jval_name}_raw = match {val_expr} {{ Some(ref __inner) => __ketox_write_model_{name}(__ketox_env, __inner)?, None => ::std::ptr::null_mut() }};").unwrap();
+                }
+                _ => {
+                    writeln!(output, "{indent}let {jval_name}_raw = ::std::ptr::null_mut();").unwrap();
+                }
+            }
+            writeln!(output, "{indent}let {jval_name}_obj = unsafe {{ ::ketox::jni::objects::JObject::from_raw({jval_name}_raw) }};").unwrap();
+            writeln!(output, "{indent}let {jval_name} = ::ketox::jni::objects::JValue::from(&{jval_name}_obj);").unwrap();
+        }
+        _ => {}
+    }
+}
+
+fn generate_enum_helpers(enum_: &Enum, module: &Module, output: &mut String) {
+    let pkg_path = module.package.replace('.', "/");
+    let enum_cls_path = format!("{pkg_path}/{}", enum_.kotlin_name);
+    let rust_name = &enum_.rust_name;
+
+    writeln!(output, "\n#[allow(non_snake_case)]").unwrap();
+    writeln!(
+        output,
+        "fn __ketox_read_enum_{rust_name}(\n    __ketox_env: &mut ::ketox::jni::JNIEnv<'_>,\n    __ketox_obj: &::ketox::jni::objects::JObject<'_>,\n) -> Result<crate::{rust_name}, ::ketox::runtime::BridgeError> {{"
+    )
+    .unwrap();
+    writeln!(output, "    if __ketox_obj.is_null() {{").unwrap();
+    writeln!(
+        output,
+        "        return Err(::ketox::runtime::BridgeError::new(\"java/lang/NullPointerException\", \"Ketox enum argument must not be null\"));"
+    )
+    .unwrap();
+    writeln!(output, "    }}").unwrap();
+
+    if enum_.is_simple() {
+        writeln!(
+            output,
+            "    let __ordinal = __ketox_env.call_method(__ketox_obj, \"ordinal\", \"()I\", &[])?.i()?;"
+        )
+        .unwrap();
+        writeln!(output, "    match __ordinal {{").unwrap();
+        for (i, variant) in enum_.variants.iter().enumerate() {
+            writeln!(
+                output,
+                "        {i} => Ok(crate::{rust_name}::{}),",
+                variant.rust_name
+            )
+            .unwrap();
+        }
+        writeln!(
+            output,
+            "        _ => Err(::ketox::runtime::BridgeError::new(\"java/lang/IllegalArgumentException\", format!(\"unexpected ordinal {{__ordinal}} for {rust_name}\"))),"
+        )
+        .unwrap();
+        writeln!(output, "    }}").unwrap();
+    } else {
+        for (i, variant) in enum_.variants.iter().enumerate() {
+            let var_cls_path = format!("{enum_cls_path}${}", variant.kotlin_name);
+            writeln!(
+                output,
+                "    let __cls_{i} = __ketox_env.find_class(\"{var_cls_path}\")?;"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "    if __ketox_env.is_instance_of(__ketox_obj, &__cls_{i})? {{"
+            )
+            .unwrap();
+            if variant.fields.is_empty() {
+                writeln!(
+                    output,
+                    "        return Ok(crate::{rust_name}::{});",
+                    variant.rust_name
+                )
+                .unwrap();
+            } else {
+                let is_tuple = variant
+                    .fields
+                    .first()
+                    .map(|f| f.rust_name.parse::<usize>().is_ok())
+                    .unwrap_or(false);
+                let mut field_names = Vec::new();
+                for (j, field) in variant.fields.iter().enumerate() {
+                    let var_name = format!("__field_{j}");
+                    generate_field_read_statements(
+                        field,
+                        "__ketox_obj",
+                        &var_name,
+                        "        ",
+                        module,
+                        output,
+                    );
+                    field_names.push((&field.rust_name, var_name));
+                }
+                if is_tuple {
+                    let args = field_names
+                        .iter()
+                        .map(|(_, v)| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(
+                        output,
+                        "        return Ok(crate::{rust_name}::{}({args}));",
+                        variant.rust_name
+                    )
+                    .unwrap();
+                } else {
+                    let fields_init = field_names
+                        .iter()
+                        .map(|(r, v)| format!("{r}: {v}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(
+                        output,
+                        "        return Ok(crate::{rust_name}::{} {{ {fields_init} }});",
+                        variant.rust_name
+                    )
+                    .unwrap();
+                }
+            }
+            writeln!(output, "    }}").unwrap();
+        }
+        writeln!(
+            output,
+            "    Err(::ketox::runtime::BridgeError::new(\"java/lang/IllegalArgumentException\", \"unknown variant instance of {rust_name}\"))"
+        )
+        .unwrap();
+    }
+    writeln!(output, "}}").unwrap();
+
+    writeln!(output, "\n#[allow(non_snake_case)]").unwrap();
+    writeln!(
+        output,
+        "fn __ketox_write_enum_{rust_name}(\n    __ketox_env: &mut ::ketox::jni::JNIEnv<'_>,\n    __ketox_val: &crate::{rust_name},\n) -> Result<::ketox::jni::sys::jobject, ::ketox::runtime::BridgeError> {{"
+    )
+    .unwrap();
+
+    if enum_.is_simple() {
+        writeln!(
+            output,
+            "    let __cls = __ketox_env.find_class(\"{enum_cls_path}\")?;"
+        )
+        .unwrap();
+        writeln!(output, "    match __ketox_val {{").unwrap();
+        for variant in &enum_.variants {
+            writeln!(output, "        crate::{rust_name}::{} => {{", variant.rust_name).unwrap();
+            writeln!(
+                output,
+                "            let __field = __ketox_env.get_static_field(&__cls, \"{}\", \"L{enum_cls_path};\")?.l()?;",
+                variant.kotlin_name
+            )
+            .unwrap();
+            writeln!(output, "            Ok(__field.into_raw())").unwrap();
+            writeln!(output, "        }}").unwrap();
+        }
+        writeln!(output, "    }}").unwrap();
+    } else {
+        writeln!(output, "    match __ketox_val {{").unwrap();
+        for variant in &enum_.variants {
+            let var_cls_path = format!("{enum_cls_path}${}", variant.kotlin_name);
+            if variant.fields.is_empty() {
+                writeln!(output, "        crate::{rust_name}::{} => {{", variant.rust_name).unwrap();
+                writeln!(
+                    output,
+                    "            let __cls = __ketox_env.find_class(\"{var_cls_path}\")?;"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "            let __inst = __ketox_env.get_static_field(&__cls, \"INSTANCE\", \"L{var_cls_path};\")?.l()?;"
+                )
+                .unwrap();
+                writeln!(output, "            Ok(__inst.into_raw())").unwrap();
+                writeln!(output, "        }}").unwrap();
+            } else {
+                let is_tuple = variant
+                    .fields
+                    .first()
+                    .map(|f| f.rust_name.parse::<usize>().is_ok())
+                    .unwrap_or(false);
+                let mut pat_bindings = Vec::new();
+                for (j, field) in variant.fields.iter().enumerate() {
+                    pat_bindings.push((&field.rust_name, format!("__f_{j}")));
+                }
+                if is_tuple {
+                    let pat_str = pat_bindings
+                        .iter()
+                        .map(|(_, b)| b.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(
+                        output,
+                        "        crate::{rust_name}::{}({pat_str}) => {{",
+                        variant.rust_name
+                    )
+                    .unwrap();
+                } else {
+                    let pat_str = pat_bindings
+                        .iter()
+                        .map(|(r, b)| format!("{r}: {b}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(
+                        output,
+                        "        crate::{rust_name}::{} {{ {pat_str} }} => {{",
+                        variant.rust_name
+                    )
+                    .unwrap();
+                }
+                writeln!(
+                    output,
+                    "            let __cls = __ketox_env.find_class(\"{var_cls_path}\")?;"
+                )
+                .unwrap();
+                let mut jval_names = Vec::new();
+                for (j, field) in variant.fields.iter().enumerate() {
+                    let jval = format!("__jval_{j}");
+                    generate_field_write_statements(
+                        field,
+                        &pat_bindings[j].1,
+                        &jval,
+                        "            ",
+                        module,
+                        output,
+                    );
+                    jval_names.push(jval);
+                }
+                let ctor_sig = format!(
+                    "({})V",
+                    variant
+                        .fields
+                        .iter()
+                        .map(|f| jni_descriptor(&f.ty, &module.package))
+                        .collect::<Vec<_>>()
+                        .join("")
+                );
+                let args_str = jval_names.join(", ");
+                writeln!(
+                    output,
+                    "            let __res = __ketox_env.new_object(&__cls, \"{ctor_sig}\", &[{args_str}])?;"
+                )
+                .unwrap();
+                writeln!(output, "            Ok(__res.into_raw())").unwrap();
+                writeln!(output, "        }}").unwrap();
+            }
+        }
+        writeln!(output, "    }}").unwrap();
+    }
+    writeln!(output, "}}").unwrap();
+}
+
+fn generate_model_helpers(model: &Model, module: &Module, output: &mut String) {
+    let pkg_path = module.package.replace('.', "/");
+    let model_cls_path = format!("{pkg_path}/{}", model.kotlin_name);
+    let rust_name = &model.rust_name;
+
+    writeln!(output, "\n#[allow(non_snake_case)]").unwrap();
+    writeln!(
+        output,
+        "fn __ketox_read_model_{rust_name}(\n    __ketox_env: &mut ::ketox::jni::JNIEnv<'_>,\n    __ketox_obj: &::ketox::jni::objects::JObject<'_>,\n) -> Result<crate::{rust_name}, ::ketox::runtime::BridgeError> {{"
+    )
+    .unwrap();
+    writeln!(output, "    if __ketox_obj.is_null() {{").unwrap();
+    writeln!(
+        output,
+        "        return Err(::ketox::runtime::BridgeError::new(\"java/lang/NullPointerException\", \"Ketox model argument must not be null\"));"
+    )
+    .unwrap();
+    writeln!(output, "    }}").unwrap();
+
+    let mut field_names = Vec::new();
+    for (j, field) in model.fields.iter().enumerate() {
+        let var_name = format!("__field_{j}");
+        generate_field_read_statements(field, "__ketox_obj", &var_name, "    ", module, output);
+        field_names.push((&field.rust_name, var_name));
+    }
+    let fields_init = field_names
+        .iter()
+        .map(|(r, v)| format!("{r}: {v}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        output,
+        "    Ok(crate::{rust_name} {{ {fields_init} }})"
+    )
+    .unwrap();
+    writeln!(output, "}}").unwrap();
+
+    writeln!(output, "\n#[allow(non_snake_case)]").unwrap();
+    writeln!(
+        output,
+        "fn __ketox_write_model_{rust_name}(\n    __ketox_env: &mut ::ketox::jni::JNIEnv<'_>,\n    __ketox_val: &crate::{rust_name},\n) -> Result<::ketox::jni::sys::jobject, ::ketox::runtime::BridgeError> {{"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "    let __cls = __ketox_env.find_class(\"{model_cls_path}\")?;"
+    )
+    .unwrap();
+
+    let mut jval_names = Vec::new();
+    for (j, field) in model.fields.iter().enumerate() {
+        let jval = format!("__jval_{j}");
+        let val_expr = format!("&__ketox_val.{}", field.rust_name);
+        generate_field_write_statements(field, &val_expr, &jval, "    ", module, output);
+        jval_names.push(jval);
+    }
+    let ctor_sig = format!(
+        "({})V",
+        model
+            .fields
+            .iter()
+            .map(|f| jni_descriptor(&f.ty, &module.package))
+            .collect::<Vec<_>>()
+            .join("")
+    );
+    let args_str = jval_names.join(", ");
+    writeln!(
+        output,
+        "    let __res = __ketox_env.new_object(&__cls, \"{ctor_sig}\", &[{args_str}])?;"
+    )
+    .unwrap();
+    writeln!(output, "    Ok(__res.into_raw())").unwrap();
+    writeln!(output, "}}").unwrap();
 }
 
 fn jni_rust_type(ty: &Type, input: bool) -> &'static str {
@@ -950,6 +1744,12 @@ fn jni_rust_type(ty: &Type, input: bool) -> &'static str {
             "::ketox::jni::objects::JBooleanArray<'local>"
         }
         Type::BooleanArray | Type::BooleanSlice => "::ketox::jni::sys::jbooleanArray",
+        Type::StringArray | Type::StringSlice if input => {
+            "::ketox::jni::objects::JObjectArray<'local>"
+        }
+        Type::StringArray | Type::StringSlice => "::ketox::jni::sys::jobjectArray",
+        Type::Enum(_) | Type::Model(_) if input => "::ketox::jni::objects::JObject<'local>",
+        Type::Enum(_) | Type::Model(_) => "::ketox::jni::sys::jobject",
         Type::Option(inner) => match inner.as_ref() {
             Type::String | Type::Str if input => "::ketox::jni::objects::JString<'local>",
             Type::String | Type::Str => "::ketox::jni::sys::jstring",
@@ -975,6 +1775,10 @@ fn jni_rust_type(ty: &Type, input: bool) -> &'static str {
                 "::ketox::jni::objects::JBooleanArray<'local>"
             }
             Type::BooleanArray | Type::BooleanSlice => "::ketox::jni::sys::jbooleanArray",
+            Type::StringArray | Type::StringSlice if input => {
+                "::ketox::jni::objects::JObjectArray<'local>"
+            }
+            Type::StringArray | Type::StringSlice => "::ketox::jni::sys::jobjectArray",
             _ if input => "::ketox::jni::objects::JObject<'local>",
             _ => "::ketox::jni::sys::jobject",
         },
@@ -985,8 +1789,9 @@ fn jni_rust_type(ty: &Type, input: bool) -> &'static str {
 
 fn jni_default(ty: &Type) -> &'static str {
     match ty {
-        Type::String | Type::Str => "::std::ptr::null_mut()",
-        Type::ByteArray
+        Type::String
+        | Type::Str
+        | Type::ByteArray
         | Type::ByteSlice
         | Type::IntArray
         | Type::IntSlice
@@ -998,6 +1803,10 @@ fn jni_default(ty: &Type) -> &'static str {
         | Type::DoubleSlice
         | Type::BooleanArray
         | Type::BooleanSlice
+        | Type::StringArray
+        | Type::StringSlice
+        | Type::Enum(_)
+        | Type::Model(_)
         | Type::Option(_) => "::std::ptr::null_mut()",
         Type::F32 | Type::F64 => "0.0",
         Type::Unit => "()",
@@ -1276,5 +2085,97 @@ mod tests {
         assert!(generated.kotlin.contains("internal fun checkAlive()"));
         assert!(generated.rust.contains("get_handle_arc::<crate::Vector>"));
         assert!(generated.rust.contains("destroy_handle::<crate::Vector>"));
+    }
+
+    #[test]
+    fn generates_phase_four_enums_models_and_collections_and_valid_rust_syntax() {
+        let module = module(
+            r#"
+            #[kotlin_enum]
+            pub enum Status {
+                Pending,
+                Active,
+                Completed,
+                Failed,
+            }
+
+            #[kotlin_enum]
+            pub enum Shape {
+                Circle { radius: f64 },
+                Rectangle { width: f64, height: f64 },
+                Point,
+            }
+
+            #[kotlin_model]
+            pub struct UserProfile {
+                pub id: i64,
+                pub username: String,
+                pub email: Option<String>,
+                pub status: Status,
+            }
+
+            #[kotlin_export]
+            pub fn check_status(status: Status) -> Status {
+                status
+            }
+
+            #[kotlin_export]
+            pub fn describe_shape(shape: Shape) -> String {
+                match shape {
+                    Shape::Circle { radius } => format!("Circle: {radius}"),
+                    Shape::Rectangle { width, height } => format!("Rect: {width}x{height}"),
+                    Shape::Point => "Point".to_owned(),
+                }
+            }
+
+            #[kotlin_export]
+            pub fn create_user(profile: UserProfile) -> UserProfile {
+                profile
+            }
+
+            #[kotlin_export]
+            pub fn filter_names(names: &[String], query: &str) -> Vec<String> {
+                names.iter().filter(|s| s.contains(query)).cloned().collect()
+            }
+
+            #[kotlin_export]
+            pub fn opt_user(id: i64) -> Option<UserProfile> {
+                None
+            }
+            "#,
+        );
+        let generated = generate(&module).unwrap();
+        syn::parse_file(&generated.rust).expect("generated JNI glue should be valid Rust");
+
+        // Simple Enum in Kotlin and Rust
+        assert!(generated.kotlin.contains("enum class Status {"));
+        assert!(generated.kotlin.contains("    Pending,"));
+        assert!(generated.kotlin.contains("    Active,"));
+        assert!(generated.rust.contains("fn __ketox_read_enum_Status("));
+        assert!(generated.rust.contains("fn __ketox_write_enum_Status("));
+
+        // Data-bearing Enum (sealed class) in Kotlin and Rust
+        assert!(generated.kotlin.contains("sealed class Shape {"));
+        assert!(generated.kotlin.contains("data class Circle(val radius: kotlin.Double) : Shape()"));
+        assert!(generated.kotlin.contains("data class Rectangle(val width: kotlin.Double, val height: kotlin.Double) : Shape()"));
+        assert!(generated.kotlin.contains("data object Point : Shape()"));
+        assert!(generated.rust.contains("fn __ketox_read_enum_Shape("));
+        assert!(generated.rust.contains("fn __ketox_write_enum_Shape("));
+
+        // Model in Kotlin and Rust
+        assert!(generated.kotlin.contains("data class UserProfile(val id: kotlin.Long, val username: kotlin.String, val email: kotlin.String?, val status: Status)"));
+        assert!(generated.rust.contains("fn __ketox_read_model_UserProfile("));
+        assert!(generated.rust.contains("fn __ketox_write_model_UserProfile("));
+
+        // Function signatures in Kotlin
+        assert!(generated.kotlin.contains("external fun checkStatus(status: Status): Status"));
+        assert!(generated.kotlin.contains("external fun describeShape(shape: Shape): kotlin.String"));
+        assert!(generated.kotlin.contains("external fun createUser(profile: UserProfile): UserProfile"));
+        assert!(generated.kotlin.contains("external fun filterNames(names: kotlin.Array<kotlin.String>, query: kotlin.String): kotlin.Array<kotlin.String>"));
+        assert!(generated.kotlin.contains("external fun optUser(id: kotlin.Long): UserProfile?"));
+
+        // Conversions in Rust
+        assert!(generated.rust.contains("read_string_vec"));
+        assert!(generated.rust.contains("write_string_array"));
     }
 }

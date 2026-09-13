@@ -80,3 +80,39 @@ pub fn kotlin_constructor(args: TokenStream, item: TokenStream) -> TokenStream {
     }
     item
 }
+
+/// Marks a Rust enum for export as a Kotlin enum or sealed class.
+#[proc_macro_attribute]
+pub fn kotlin_enum(args: TokenStream, item: TokenStream) -> TokenStream {
+    if !args.is_empty() {
+        return syn::Error::new(
+            proc_macro::Span::call_site().into(),
+            "Ketox: #[kotlin_enum] does not accept arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let item_enum = syn::parse_macro_input!(item as syn::ItemEnum);
+    quote! {
+        #item_enum
+    }
+    .into()
+}
+
+/// Marks a Rust struct for export as a Kotlin data class model.
+#[proc_macro_attribute]
+pub fn kotlin_model(args: TokenStream, item: TokenStream) -> TokenStream {
+    if !args.is_empty() {
+        return syn::Error::new(
+            proc_macro::Span::call_site().into(),
+            "Ketox: #[kotlin_model] does not accept arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let item_struct = syn::parse_macro_input!(item as syn::ItemStruct);
+    quote! {
+        #item_struct
+    }
+    .into()
+}

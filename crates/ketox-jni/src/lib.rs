@@ -6,11 +6,11 @@ use jni::{
     JNIEnv,
     objects::{
         JBooleanArray, JByteArray, JCharArray, JDoubleArray, JFloatArray, JIntArray, JLongArray,
-        JObject, JString,
+        JObject, JObjectArray, JString,
     },
     sys::{
         jboolean, jbooleanArray, jbyte, jbyteArray, jdouble, jdoubleArray, jfloat, jfloatArray,
-        jint, jintArray, jlong, jlongArray, jobject, jshort, jstring,
+        jint, jintArray, jlong, jlongArray, jobject, jobjectArray, jshort, jstring,
     },
 };
 use std::any::Any;
@@ -645,6 +645,65 @@ pub fn write_opt_boolean_array(
         None => Ok(std::ptr::null_mut()),
     }
 }
+
+pub fn read_string_vec(
+    env: &mut JNIEnv<'_>,
+    array: &JObjectArray<'_>,
+) -> Result<Vec<String>, BridgeError> {
+    if array.is_null() {
+        return Err(BridgeError::new(
+            "java/lang/NullPointerException",
+            "Ketox String array argument must not be null",
+        ));
+    }
+    let len = env.get_array_length(array)? as usize;
+    check_array_length(len)?;
+    let mut vec = Vec::with_capacity(len);
+    for i in 0..len {
+        let elem = env.get_object_array_element(array, i as i32)?;
+        let jstr = JString::from(elem);
+        vec.push(read_string(env, &jstr)?);
+    }
+    Ok(vec)
+}
+
+pub fn write_string_array(
+    env: &mut JNIEnv<'_>,
+    values: &[impl AsRef<str>],
+) -> Result<jobjectArray, BridgeError> {
+    let len = values.len();
+    check_array_length(len)?;
+    let string_cls = env.find_class("java/lang/String")?;
+    let array = env.new_object_array(len as i32, &string_cls, JObject::null())?;
+    for (i, val) in values.iter().enumerate() {
+        let jstr = write_string(env, val.as_ref())?;
+        let jobj = unsafe { JObject::from_raw(jstr) };
+        env.set_object_array_element(&array, i as i32, &jobj)?;
+    }
+    Ok(array.into_raw())
+}
+
+pub fn read_opt_string_vec(
+    env: &mut JNIEnv<'_>,
+    array: &JObjectArray<'_>,
+) -> Result<Option<Vec<String>>, BridgeError> {
+    if array.is_null() {
+        Ok(None)
+    } else {
+        read_string_vec(env, array).map(Some)
+    }
+}
+
+pub fn write_opt_string_array(
+    env: &mut JNIEnv<'_>,
+    values: Option<impl AsRef<[String]>>,
+) -> Result<jobjectArray, BridgeError> {
+    match values {
+        Some(v) => write_string_array(env, v.as_ref()),
+        None => Ok(std::ptr::null_mut()),
+    }
+}
+
 
 #[derive(Clone)]
 struct HandleEntry {

@@ -45,19 +45,33 @@ The [full design and roadmap](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) remains 
 - [x] Generate Kotlin classes implementing `java.lang.AutoCloseable` with `nativeHandle: Long`, `checkAlive()`, methods, and `close()`.
 - [x] Verify complete Phase 3 on JVM with `-Xcheck:jni` covering instantiation, methods, mutation, cross-class calls, `.use { ... }`, stale handles, and double closes.
 
+## Milestone: Phase 4 — Enums, Models, and Collections (Completed)
+
+- [x] Extend metadata schema to version 4 with `enums` and `models`.
+- [x] Add `#[kotlin_enum]` attribute macro for exporting simple and data-bearing enums.
+- [x] Add `#[kotlin_model]` (and `#[kotlin_data]`) attribute macro for exporting data structs.
+- [x] Implement Simple Enums: Rust fieldless enums ↔ Kotlin `enum class` with fast ordinal dispatch and static variant fields.
+- [x] Implement Data-bearing Enums / ADTs: Rust enums with payload ↔ Kotlin `sealed class` with nested `data class` and `data object` variants.
+- [x] Implement Data Models / Structs: Rust structs ↔ Kotlin `data class`, supporting nested models, enums, options, and collections.
+- [x] Implement Rich Collections: `Vec<String>` and `&[String]` mapped to Kotlin `Array<String>` (`[Ljava/lang/String;`).
+- [x] Implement comprehensive type resolution and cycle-safe validation in `ketox-core`.
+- [x] Implement JNI conversion helpers and recursive nested field readers/writers in `ketox-codegen` and `ketox-jni`.
+- [x] Verify complete Phase 4 on JVM with `-Xcheck:jni` covering simple enums, sealed classes with `when` pattern matching, data models with nested structures, and string collections.
+
 ## Validation status
 
 | Environment | Status |
 | --- | --- |
-| Local Windows Rust checks | All tests, lints (`clippy -D warnings`), and formatting pass |
-| Local Windows JVM checks | Passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Vector class, methods, mutation, AutoCloseable, stale handle protection |
+| Local Windows Rust checks | All tests, lints, and formatting pass (`cargo test --workspace`) |
+| Local Windows JVM checks | Passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Vector class, methods, mutation, AutoCloseable, stale handle protection, Simple Enums, Sealed Classes / ADTs, Data Models, String Arrays (`-Xcheck:jni`) |
 | GitHub Actions Windows/Linux/macOS | Configured; tested locally |
 | Rust minimum-version check | Verified |
 | Android and Kotlin/Native | Planned for future phases |
 
-## Next work (Phase 4)
+## Next work (Phase 5)
 
-1. Enums and data models: Rust enums ↔ Kotlin enums and sealed classes mapping.
-2. Rich collections: `Vec<String>`, maps, and nested data structures.
-3. Callbacks, Kotlin coroutines, and async integration.
-4. Android distribution (AAR packaging) and Gradle plugin integration.
+1. Callbacks, function pointers, and Kotlin lambdas.
+2. Async integration: Kotlin coroutines and Rust futures / channels.
+3. Android distribution (AAR packaging) and Gradle plugin integration.
+4. Kotlin Multiplatform / Kotlin/Native backend.
+

@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased — 0.0.3 development (Phase 3)
+## Unreleased — 0.0.4 development (Phase 4)
+
+- Implemented Simple Enums: Rust C-like fieldless enums ↔ Kotlin `enum class` with JNI ordinal dispatch and static variant fields.
+- Implemented Data-bearing Enums / ADTs: Rust enums with payload ↔ Kotlin `sealed class` with `data class` and `data object` variants.
+- Implemented Data Models / Value Structs: Rust structs annotated with `#[kotlin_model]` (or `#[kotlin_data]`) ↔ Kotlin `data class`, supporting nested models, enums, options, and collections.
+- Added Rich Collections support: `Vec<String>` and `&[String]` mapped to Kotlin `Array<String>` (`[Ljava/lang/String;`).
+- Added `#[kotlin_enum]` and `#[kotlin_model]` attribute macros to `ketox-macros` and exported in `ketox::prelude`.
+- Bumped metadata schema to version 4 with backward compatibility for versions 1, 2, 3, and 4.
+- Added recursive field reading and writing code generation for nested models and enums.
+- Added comprehensive unit and JVM integration tests (`-Xcheck:jni`) verifying enums, sealed class pattern matching, data models, and string arrays.
+
+## 0.0.3 development (Phase 3)
 
 - Implemented Rust Structs ↔ Kotlin Classes mapping.
 - Added `#[kotlin_class]` attribute macro for exposing Rust structs.

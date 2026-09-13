@@ -1,17 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Ketox module metadata schema",
-  "description": "Structural schema for Ketox metadata versions 1, 2, and 3. ketox-core additionally validates reserved names, derived Kotlin names, and function/class/parameter name uniqueness.",
+  "description": "Structural schema for Ketox metadata versions 1, 2, 3, and 4. ketox-core additionally validates reserved names, derived Kotlin names, and function/class/parameter name uniqueness.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "package", "class_name", "library_name", "functions"],
   "properties": {
-    "schema_version": { "enum": [1, 2, 3] },
+    "schema_version": { "enum": [1, 2, 3, 4] },
     "package": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
     "class_name": { "$ref": "#/$defs/identifier" },
     "library_name": { "$ref": "#/$defs/identifier" },
     "functions": { "type": "array", "items": { "$ref": "#/$defs/function" } },
-    "classes": { "type": "array", "items": { "$ref": "#/$defs/class" } }
+    "classes": { "type": "array", "items": { "$ref": "#/$defs/class" } },
+    "enums": { "type": "array", "items": { "$ref": "#/$defs/enum" } },
+    "models": { "type": "array", "items": { "$ref": "#/$defs/model" } }
   },
   "$defs": {
     "identifier": { "type": "string", "pattern": "^(?!_+$)[A-Za-z_][A-Za-z0-9_]*$" },
@@ -69,13 +71,52 @@
         "methods": { "type": "array", "items": { "$ref": "#/$defs/method" } }
       }
     },
+    "enum_variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "fields"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+      }
+    },
+    "enum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rust_name", "kotlin_name", "variants"],
+      "properties": {
+        "rust_name": { "$ref": "#/$defs/identifier" },
+        "kotlin_name": { "$ref": "#/$defs/identifier" },
+        "variants": { "type": "array", "items": { "$ref": "#/$defs/enum_variant" } }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "ty"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "ty": { "$ref": "#/$defs/type" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rust_name", "kotlin_name", "fields"],
+      "properties": {
+        "rust_name": { "$ref": "#/$defs/identifier" },
+        "kotlin_name": { "$ref": "#/$defs/identifier" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+      }
+    },
     "type": {
       "oneOf": [
         {
           "enum": [
             "bool", "i8", "i16", "i32", "i64", "f32", "f64", "string", "str", "unit",
             "byte_array", "byte_slice", "int_array", "int_slice", "long_array", "long_slice",
-            "float_array", "float_slice", "double_array", "double_slice", "boolean_array", "boolean_slice"
+            "float_array", "float_slice", "double_array", "double_slice", "boolean_array", "boolean_slice",
+            "string_array", "string_slice"
           ]
         },
         {
@@ -84,6 +125,22 @@
           "required": ["class"],
           "properties": {
             "class": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enum"],
+          "properties": {
+            "enum": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model"],
+          "properties": {
+            "model": { "$ref": "#/$defs/identifier" }
           }
         },
         {

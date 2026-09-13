@@ -24,6 +24,10 @@ import sys
 root = Path(sys.argv[1])
 compiler = shutil.which(sys.argv[2])
 if compiler is None:
+    bundled = root / ".tools/kotlin-2.2.0/kotlinc/bin/kotlinc"
+    if bundled.exists():
+        compiler = str(bundled)
+if compiler is None:
     sys.exit("Kotlin compiler not found: " + sys.argv[2] + ". Install Kotlin 2.2.0 and put kotlinc on PATH, or pass its path as the first argument (or set KETOX_KOTLINC).")
 compiler = str(Path(compiler).resolve())
 cargo = shutil.which("cargo")

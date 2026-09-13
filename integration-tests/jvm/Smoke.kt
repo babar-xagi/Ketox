@@ -92,6 +92,62 @@ fun main() {
 
     v2.close()
 
+    // Phase 4: Simple Enums
+    check(RustApi.checkStatus(Status.Pending) == Status.Active)
+    check(RustApi.checkStatus(Status.Active) == Status.Completed)
+    check(RustApi.checkStatus(Status.Completed) == Status.Completed)
+    check(RustApi.checkStatus(Status.Failed) == Status.Pending)
+    check(Status.Pending.ordinal == 0)
+    check(Status.Active.ordinal == 1)
+    check(Status.Completed.ordinal == 2)
+    check(Status.Failed.ordinal == 3)
+
+    // Phase 4: Data-bearing Enums / Sealed Classes
+    check(RustApi.describeShape(Shape.Circle(5.0)) == "Circle(5.0)")
+    check(RustApi.describeShape(Shape.Rectangle(4.0, 6.0)) == "Rect(4.0x6.0)")
+    check(RustApi.describeShape(Shape.Point) == "Point")
+
+    val createdCircle = RustApi.makeCircle(10.5)
+    check(createdCircle is Shape.Circle && Math.abs(createdCircle.radius - 10.5) < 1e-6)
+
+    val shapes: List<Shape> = listOf(RustApi.makeCircle(10.5), Shape.Rectangle(2.0, 3.0), Shape.Point)
+    val descs = shapes.map { s ->
+        when (s) {
+            is Shape.Circle -> "circle:${s.radius}"
+            is Shape.Rectangle -> "rect:${s.width}x${s.height}"
+            Shape.Point -> "point"
+        }
+    }
+    check(descs == listOf("circle:10.5", "rect:2.0x3.0", "point"))
+
+    // Phase 4: Data Models / Structs
+    val user1 = UserProfile(101L, "babar", "babar@example.com", Status.Active)
+    val echoedUser1 = RustApi.createUser(user1)
+    check(echoedUser1 == user1)
+    check(echoedUser1.id == 101L)
+    check(echoedUser1.username == "babar")
+    check(echoedUser1.email == "babar@example.com")
+    check(echoedUser1.status == Status.Active)
+
+    val user2 = UserProfile(102L, "guest", null, Status.Pending)
+    val echoedUser2 = RustApi.createUser(user2)
+    check(echoedUser2 == user2)
+    check(echoedUser2.email == null)
+
+    val canvas = Canvas("MyCanvas", Shape.Circle(2.5), Status.Active)
+    val canvasDesc = RustApi.inspectCanvas(canvas)
+    check(canvasDesc.contains("MyCanvas") && canvasDesc.contains("Circle") && canvasDesc.contains("Active"))
+
+    val admin = RustApi.optUser(1L)
+    check(admin != null && admin.username == "admin" && admin.status == Status.Active)
+    check(RustApi.optUser(99L) == null)
+
+    // Phase 4: String Arrays & Slices
+    val names = arrayOf("Alice", "Bob", "Charlie", "David", "Alexander")
+    val filtered = RustApi.filterNames(names, "Al")
+    check(filtered.contentEquals(arrayOf("Alice", "Alexander")))
+    check(RustApi.filterNames(emptyArray(), "test").isEmpty())
+
     val threads = (1..4).map { worker ->
         Thread {
             repeat(100) { check(RustApi.echo("thread-$worker-🦀") == "thread-$worker-🦀") }
@@ -105,5 +161,5 @@ fun main() {
     threads.forEach { it.join() }
     check(failures.isEmpty()) { "Concurrent JNI calls failed: $failures" }
     println(RustApi.hello("Kotlin"))
-    println("Ketox JVM smoke tests passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Classes, Structs, Lifecycle")
+    println("Ketox JVM smoke tests passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Classes, Structs, Enums, SealedClasses, Models, Collections, Lifecycle")
 }

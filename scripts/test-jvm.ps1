@@ -11,6 +11,13 @@ $PSNativeCommandUseErrorActionPreference = $false
 if ([string]::IsNullOrWhiteSpace($Kotlinc)) { $Kotlinc = 'kotlinc' }
 $compiler = Get-Command -Name $Kotlinc -CommandType Application -ErrorAction SilentlyContinue
 if ($null -eq $compiler) {
+    $root = Split-Path -Parent $PSScriptRoot
+    $bundled = Join-Path $root '.tools\kotlin-2.2.0\kotlinc\bin\kotlinc.bat'
+    if (Test-Path -LiteralPath $bundled) {
+        $compiler = Get-Command -Name $bundled -CommandType Application -ErrorAction SilentlyContinue
+    }
+}
+if ($null -eq $compiler) {
     throw "Kotlin compiler not found: $Kotlinc. Install Kotlin 2.2.0 and put kotlinc on PATH, or pass -Kotlinc 'C:\path\kotlinc.bat' (or set KETOX_KOTLINC)."
 }
 $java = Get-Command -Name java -CommandType Application -ErrorAction SilentlyContinue
