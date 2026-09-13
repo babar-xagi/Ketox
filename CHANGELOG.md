@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased — 0.0.2 development (Phase 2)
+## Unreleased — 0.0.3 development (Phase 3)
+
+- Implemented Rust Structs ↔ Kotlin Classes mapping.
+- Added `#[kotlin_class]` attribute macro for exposing Rust structs.
+- Added `#[kotlin_constructor]` attribute macro and constructor detection for `new`, `Self`, and `Result<Self, E>` returns.
+- Extended `#[kotlin_export]` to support `impl StructName` blocks.
+- Added support for methods with `&self` (immutable) and `&mut self` (mutable) receivers.
+- Implemented global, thread-safe `HANDLE_REGISTRY` in `ketox-jni` storing instances in `Arc<RwLock<T>>` for safe concurrent reads and serialized writes.
+- Implemented robust handle lifecycle functions: `register_handle`, `get_handle_arc`, `with_handle`, `with_handle_mut`, and `destroy_handle`.
+- Added stale-handle and double-close protection: calling methods on a destroyed handle throws `IllegalStateException`, while subsequent `close()` invocations are safe no-ops.
+- Added support for cross-type references (`&OtherClass`) in methods.
+- Generated Kotlin classes implementing `java.lang.AutoCloseable` with `nativeHandle: Long`, `checkAlive()`, methods, and `close()`.
+- Updated metadata schema to version 3 with `classes`, `constructors`, and `methods`.
+- Added JVM smoke test assertions verifying struct creation, method invocation, mutation, `.use { ... }`, stale-handle exception, and double-close safety under `-Xcheck:jni`.
+
+## 0.0.2 development (Phase 2)
 
 - Added metadata schema version 2 supporting `Option`, `Result`, and array types.
 - Implemented `Option<T>` for arguments and return types, mapping to Kotlin nullable types `T?` with JNI boxed primitive/object conversions.

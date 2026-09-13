@@ -96,6 +96,37 @@ pub fn opt_add(a: Option<i32>, b: Option<i32>) -> Option<i32> {
     }
 }
 
+#[kotlin_class]
+pub struct Vector {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[kotlin_export]
+impl Vector {
+    #[kotlin_constructor]
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
+    pub fn magnitude(&self) -> f64 {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+
+    pub fn scale(&mut self, factor: f64) {
+        self.x *= factor;
+        self.y *= factor;
+    }
+
+    pub fn dot(&self, other: &Vector) -> f64 {
+        self.x * other.x + self.y * other.y
+    }
+
+    pub fn to_string_repr(&self) -> String {
+        format!("Vector({}, {})", self.x, self.y)
+    }
+}
+
 include!(concat!(env!("OUT_DIR"), "/ketox_jni.rs"));
 
 #[cfg(test)]

@@ -1,11 +1,11 @@
-# Ketox
+# ketox3
 
-Ketox generates Kotlin/JVM bindings for Rust libraries. Its goal is to make Rust functions usable from Kotlin through a small annotation and generated JNI glue.
+ketox3 generates Kotlin/JVM bindings for Rust libraries. Its goal is to make Rust functions and data structures feel natural, ergonomic, and safe to call from Kotlin through annotations and generated JNI glue.
 
-This repository contains the **0.0.1 development prototype**: the architecture contracts and an initial Phase 1 functions implementation. The [full project design](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) describes the longer-term vision; [ROADMAP.md](ROADMAP.md) tracks what exists and what remains. This is not a published or stable release.
+This repository contains **ketox3** with completed Phase 1 (Functions), Phase 2 (Rich Types, Option, Result, and Arrays), and Phase 3 (Rust Structs ↔ Kotlin Classes, Handle Registry, and Object Lifecycle). The [full project design](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) describes the longer-term vision; [ROADMAP.md](ROADMAP.md) tracks milestones and implementation progress.
 
 ```rust
-use ketox::kotlin_export;
+use ketox::{kotlin_class, kotlin_constructor, kotlin_export};
 
 #[kotlin_export]
 pub fn add(a: i32, b: i32) -> i32 {
@@ -16,15 +16,54 @@ pub fn add(a: i32, b: i32) -> i32 {
 pub fn hello(name: String) -> String {
     format!("Hello, {name}!")
 }
+
+#[kotlin_class]
+pub struct Vector {
+    x: f64,
+    y: f64,
+}
+
+#[kotlin_export]
+impl Vector {
+    #[kotlin_constructor]
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
+    pub fn magnitude(&self) -> f64 {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+
+    pub fn scale(&mut self, factor: f64) {
+        self.x *= factor;
+        self.y *= factor;
+    }
+
+    pub fn dot(&self, other: &Vector) -> f64 {
+        self.x * other.x + self.y * other.y
+    }
+}
 ```
 
-The generated Kotlin object provides:
+The generated Kotlin bindings provide:
 
 ```kotlin
 import dev.ketox.example.RustApi
+import dev.ketox.example.Vector
 
 println(RustApi.add(20, 22))
 println(RustApi.hello("Kotlin"))
+
+// Stateful objects implement java.lang.AutoCloseable
+Vector(3.0, 4.0).use { v1 ->
+    println("Magnitude: ${v1.magnitude()}") // 5.0
+    v1.scale(2.0)
+    println("Scaled magnitude: ${v1.magnitude()}") // 10.0
+
+    Vector(1.0, 2.0).use { v2 ->
+        println("Dot product: ${v1.dot(v2)}")
+    }
+}
 ```
 
 ## Run the example and tests
@@ -86,7 +125,7 @@ The Rust library includes the generated JNI entry points at its crate root:
 include!(concat!(env!("OUT_DIR"), "/ketox_jni.rs"));
 ```
 
-Generation writes `ketox_jni.rs`, `RustApi.kt`, and `ketox-metadata.json` to Cargo's `OUT_DIR`. The Kotlin object loads the native library with `System.loadLibrary("ketox_hello")`; the integration runner supplies its directory through `java.library.path`. Native binaries are built for the host platform. Packaging native libraries into JARs or Android artifacts is future work.
+Generation writes `ketox_jni.rs`, `RustApi.kt`, and `ketox-metadata.json` to Cargo's `OUT_DIR`. The Kotlin object loads the native library with `System.loadLibrary("ketox_hello")`; the integration runner supplies its directory through `java.library.path`. Native binaries are built for the host platform. Packaging native libraries into JARs or Android artifacts is planned for subsequent phases.
 
 ## Command-line generation
 
@@ -102,36 +141,35 @@ To write the three generated artifacts to a directory for inspection:
 cargo run --locked -p ketox-cli -- generate --source examples/hello-world/src/lib.rs --package dev.ketox.example --class RustApi --library ketox_hello --out target/ketox-generated
 ```
 
-Both commands require the source, package, object name (`--class`), and library name. `generate` additionally requires `--out`; `inspect` writes JSON to standard output. `cargo run --locked -p ketox-cli -- --help` lists the options. The build helper remains the example's automatic generation path.
+Both commands require the source, package, object name (`--class`), and library name. `generate` additionally requires `--out`; `inspect` writes JSON to standard output. `cargo run --locked -p ketox-cli -- --help` lists the options.
 
-## Current boundaries
+## Features and boundaries
 
-Exports must be public, safe, synchronous, non-generic functions declared directly in the source file passed to codegen. Supported values are:
-- Primitives: `bool`, signed fixed-width integers (`i8`, `i16`, `i32`, `i64`), and floating-point values (`f32`, `f64`)
-- Strings: `String`, and borrowed `&str` inputs
-- Unit: `()` as a return type
-- Nullability: `Option<T>` for parameters and returns, mapped to Kotlin `T?` (with boxed primitives or nullable references)
-- Errors: `Result<T, E>` returns, returning `T` directly to Kotlin and converting `Err` to JVM `RuntimeException`
-- Arrays: Byte arrays (`Vec<u8>`, `&[u8]`) mapped to Kotlin `ByteArray`, and primitive arrays (`IntArray`, `LongArray`, `FloatArray`, `DoubleArray`, `BooleanArray`) for `Vec<T>` and `&[T]`
+### Supported types:
+- **Primitives:** `bool`, signed fixed-width integers (`i8`, `i16`, `i32`, `i64`), and floating-point values (`f32`, `f64`)
+- **Strings:** `String`, and borrowed `&str` inputs
+- **Unit:** `()` as a return type
+- **Nullability:** `Option<T>` for parameters and returns, mapped to Kotlin `T?` (with boxed primitives or nullable references)
+- **Errors:** `Result<T, E>` returns, returning `T` directly to Kotlin and converting `Err` to JVM `RuntimeException`
+- **Arrays:** Byte arrays (`Vec<u8>`, `&[u8]`) mapped to Kotlin `ByteArray`, and primitive arrays (`IntArray`, `LongArray`, `FloatArray`, `DoubleArray`, `BooleanArray`) for `Vec<T>` and `&[T]`
+- **Classes & Structs:** `#[kotlin_class]` structs, `#[kotlin_constructor]` associated functions, and `#[kotlin_export] impl` methods (`&self` and `&mut self`). Managed via thread-safe `Arc<RwLock<T>>` handle registry with safe double-close and stale handle protection.
 
-Rust snake_case function names become Kotlin lowerCamelCase names. Unsupported declarations and naming collisions produce diagnostics.
+Rust snake_case function and method names become Kotlin lowerCamelCase names. Struct names become PascalCase Kotlin classes. Unsupported declarations and naming collisions produce diagnostics.
 
-Strings and arrays are copied across the boundary. Null inputs on non-optional types and malformed UTF-16 are rejected. Rust panics are caught and reported as JVM exceptions when compiled with `panic = "unwind"`. See the [type contract](docs/type-system.md) and [ownership and error contract](docs/ownership.md) for exact limits.
-
-Exported classes, native handles, callbacks, async functions, Android packaging, Gradle integration, and Kotlin/Native are planned for subsequent phases.
+Rust panics are caught and reported as JVM exceptions when compiled with `panic = "unwind"`. See the [type contract](docs/type-system.md) and [ownership and error contract](docs/ownership.md) for exact details.
 
 ## Repository
 
 | Path | Responsibility |
 | --- | --- |
-| `crates/ketox` | User-facing facade and `#[kotlin_export]` re-export |
-| `crates/ketox-core` | Metadata, supported types, source validation and naming |
-| `crates/ketox-macros` | Attribute validation and per-function metadata constants |
+| `crates/ketox` | User-facing facade, macros re-export, and prelude |
+| `crates/ketox-core` | Metadata, supported types, source validation, and naming |
+| `crates/ketox-macros` | Attribute macros (`#[kotlin_export]`, `#[kotlin_class]`, `#[kotlin_constructor]`) |
 | `crates/ketox-codegen` | Deterministic Kotlin, JNI Rust, and JSON generation |
-| `crates/ketox-jni` | String conversion and panic/exception boundary |
+| `crates/ketox-jni` | String conversion, panic boundary, and thread-safe handle registry |
 | `crates/ketox-cli` | `ketox generate` and `ketox inspect` commands |
-| `examples/hello-world` | Build-script-driven native library |
-| `integration-tests/jvm` | End-to-end JVM checks |
+| `examples/hello-world` | Build-script-driven native library with functions and classes |
+| `integration-tests/jvm` | End-to-end JVM checks (`-Xcheck:jni`) |
 | `docs` | [Architecture](docs/architecture.md), [types](docs/type-system.md), [ownership](docs/ownership.md), [metadata](docs/metadata.md) |
 
-CI is configured for Windows, Linux, and macOS with stable Rust, JDK 21, and Kotlin 2.2.0, plus a Rust 1.88 compile check. Configured jobs do not imply those platforms have already been verified; [ROADMAP.md](ROADMAP.md) records validation status.
+CI is configured for Windows, Linux, and macOS with stable Rust, JDK 21, and Kotlin 2.2.0, plus a Rust 1.88 compile check.

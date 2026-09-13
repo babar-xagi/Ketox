@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Deterministic Rust JNI and Kotlin binding generation for Ketox"
+repository.workspace = true
 
 [dependencies]
 ketox-core.workspace = true

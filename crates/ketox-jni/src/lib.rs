@@ -13,7 +13,11 @@ use jni::{
         jint, jintArray, jlong, jlongArray, jobject, jshort, jstring,
     },
 };
+use std::any::Any;
+use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// Maximum string size accepted by this prototype, in UTF-16 code units.
 pub const MAX_STRING_UNITS: usize = 16 * 1024 * 1024;
@@ -642,6 +646,167 @@ pub fn write_opt_boolean_array(
     }
 }
 
+#[derive(Clone)]
+struct HandleEntry {
+    type_name: &'static str,
+    instance: Arc<RwLock<Box<dyn Any + Send + Sync>>>,
+}
+
+static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
+static HANDLE_REGISTRY: OnceLock<RwLock<HashMap<i64, HandleEntry>>> = OnceLock::new();
+
+fn handle_registry() -> &'static RwLock<HashMap<i64, HandleEntry>> {
+    HANDLE_REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Register an owned Rust object into the global handle registry and return its unique positive handle ID.
+pub fn register_handle<T: Any + Send + Sync + 'static>(value: T) -> i64 {
+    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+    let entry = HandleEntry {
+        type_name: std::any::type_name::<T>(),
+        instance: Arc::new(RwLock::new(Box::new(value))),
+    };
+    handle_registry().write().unwrap().insert(handle, entry);
+    handle
+}
+
+/// Retrieve the shared Arc lock for the native object registered under `handle`.
+pub fn get_handle_arc<T: Any + Send + Sync + 'static>(
+    handle: i64,
+) -> Result<Arc<RwLock<Box<dyn Any + Send + Sync>>>, BridgeError> {
+    if handle == 0 {
+        return Err(BridgeError::new(
+            "java/lang/IllegalStateException",
+            format!(
+                "native handle for {} is closed or uninitialized (handle: 0)",
+                std::any::type_name::<T>()
+            ),
+        ));
+    }
+    let entry = {
+        let registry = handle_registry().read().unwrap();
+        registry.get(&handle).cloned()
+    };
+    let Some(entry) = entry else {
+        return Err(BridgeError::new(
+            "java/lang/IllegalStateException",
+            format!(
+                "native handle {} for {} was not found (already closed or invalid)",
+                handle,
+                std::any::type_name::<T>()
+            ),
+        ));
+    };
+    Ok(entry.instance)
+}
+
+/// Execute a closure borrowing an immutable reference to the native object behind `handle`.
+pub fn with_handle<T: Any + Send + Sync + 'static, R>(
+    handle: i64,
+    f: impl FnOnce(&T) -> Result<R, BridgeError>,
+) -> Result<R, BridgeError> {
+    if handle == 0 {
+        return Err(BridgeError::new(
+            "java/lang/IllegalStateException",
+            format!(
+                "native handle for {} is closed or uninitialized (handle: 0)",
+                std::any::type_name::<T>()
+            ),
+        ));
+    }
+    let entry = {
+        let registry = handle_registry().read().unwrap();
+        registry.get(&handle).cloned()
+    };
+    let Some(entry) = entry else {
+        return Err(BridgeError::new(
+            "java/lang/IllegalStateException",
+            format!(
+                "native handle {} for {} was not found (already closed or invalid)",
+                handle,
+                std::any::type_name::<T>()
+            ),
+        ));
+    };
+    let guard = entry.instance.read().map_err(|_| {
+        BridgeError::new(
+            "java/lang/IllegalStateException",
+            "native handle lock poisoned",
+        )
+    })?;
+    let downcast = guard.downcast_ref::<T>().ok_or_else(|| {
+        BridgeError::new(
+            "java/lang/IllegalStateException",
+            format!(
+                "native handle {} holds {}, expected {}",
+                handle,
+                entry.type_name,
+                std::any::type_name::<T>()
+            ),
+        )
+    })?;
+    f(downcast)
+}
+
+/// Execute a closure borrowing a mutable reference to the native object behind `handle`.
+pub fn with_handle_mut<T: Any + Send + Sync + 'static, R>(
+    handle: i64,
+    f: impl FnOnce(&mut T) -> Result<R, BridgeError>,
+) -> Result<R, BridgeError> {
+    if handle == 0 {
+        return Err(BridgeError::new(
+            "java/lang/IllegalStateException",
+            format!(
+                "native handle for {} is closed or uninitialized (handle: 0)",
+                std::any::type_name::<T>()
+            ),
+        ));
+    }
+    let entry = {
+        let registry = handle_registry().read().unwrap();
+        registry.get(&handle).cloned()
+    };
+    let Some(entry) = entry else {
+        return Err(BridgeError::new(
+            "java/lang/IllegalStateException",
+            format!(
+                "native handle {} for {} was not found (already closed or invalid)",
+                handle,
+                std::any::type_name::<T>()
+            ),
+        ));
+    };
+    let mut guard = entry.instance.write().map_err(|_| {
+        BridgeError::new(
+            "java/lang/IllegalStateException",
+            "native handle lock poisoned",
+        )
+    })?;
+    let downcast = guard.downcast_mut::<T>().ok_or_else(|| {
+        BridgeError::new(
+            "java/lang/IllegalStateException",
+            format!(
+                "native handle {} holds {}, expected {}",
+                handle,
+                entry.type_name,
+                std::any::type_name::<T>()
+            ),
+        )
+    })?;
+    f(downcast)
+}
+
+/// Destroy and drop the native object registered under `handle`.
+/// Closing an already closed (or 0) handle is a safe no-op.
+pub fn destroy_handle<T: Any + Send + Sync + 'static>(handle: i64) -> Result<(), BridgeError> {
+    if handle == 0 {
+        return Ok(());
+    }
+    let mut registry = handle_registry().write().unwrap();
+    let _ = registry.remove(&handle);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -669,5 +834,40 @@ mod tests {
         assert!(check_string_length(MAX_STRING_UNITS + 1).is_err());
         assert!(check_array_length(MAX_ARRAY_ELEMENTS).is_ok());
         assert!(check_array_length(MAX_ARRAY_ELEMENTS + 1).is_err());
+    }
+
+    #[test]
+    fn handle_registry_lifecycle_and_stale_access() {
+        struct Sample {
+            value: i32,
+        }
+
+        let handle = register_handle(Sample { value: 42 });
+        assert!(handle > 0);
+
+        // Immutable read
+        let res = with_handle::<Sample, _>(handle, |s| Ok(s.value)).unwrap();
+        assert_eq!(res, 42);
+
+        // Mutable write
+        with_handle_mut::<Sample, _>(handle, |s| {
+            s.value = 100;
+            Ok(())
+        })
+        .unwrap();
+
+        let res2 = with_handle::<Sample, _>(handle, |s| Ok(s.value)).unwrap();
+        assert_eq!(res2, 100);
+
+        // Destroy
+        destroy_handle::<Sample>(handle).unwrap();
+
+        // Stale handle access throws IllegalStateException
+        let stale_err = with_handle::<Sample, _>(handle, |s| Ok(s.value)).unwrap_err();
+        assert_eq!(stale_err.class, "java/lang/IllegalStateException");
+
+        // Destroying 0 or already destroyed handle is safe no-op
+        assert!(destroy_handle::<Sample>(handle).is_ok());
+        assert!(destroy_handle::<Sample>(0).is_ok());
     }
 }

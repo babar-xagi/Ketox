@@ -1,7 +1,7 @@
-# 🌉 Ketox — Rust ↔ Kotlin Interop Toolkit
+# 🌉 ketox3 — Rust ↔ Kotlin Interop Toolkit
 
-> **Project name:** `Ketox`  
-> **Status:** Initial development — see ROADMAP.md for implementation progress  
+> **Project name:** `ketox3`  
+> **Status:** Phase 3 completed — see ROADMAP.md for implementation progress  
 > **Project type:** Open-source developer infrastructure  
 > **Primary goal:** Make Rust libraries feel natural and safe to use from Kotlin, with an experience inspired by PyO3.
 
@@ -1210,11 +1210,11 @@ Study:
 
 ### Definition of Done
 
-- [ ] architecture.md
-- [ ] type-system.md
-- [ ] ownership.md
-- [ ] first metadata schema
-- [ ] proof-of-concept Rust → JNI → Kotlin call
+- [x] architecture.md
+- [x] type-system.md
+- [x] ownership.md
+- [x] first metadata schema
+- [x] proof-of-concept Rust → JNI → Kotlin call
 
 ### Suggested Release
 
@@ -1272,13 +1272,13 @@ object NativeApi {
 
 ### Definition of Done
 
-- [ ] exported function works
-- [ ] primitives work
-- [ ] strings work
-- [ ] errors are readable
-- [ ] generated code deterministic
-- [ ] JNI smoke tests pass
-- [ ] example project works
+- [x] exported function works
+- [x] primitives work
+- [x] strings work
+- [x] errors are readable
+- [x] generated code deterministic
+- [x] JNI smoke tests pass
+- [x] example project works
 
 ### Suggested Release
 
@@ -1331,12 +1331,12 @@ with errors mapped to exceptions.
 
 ### Definition of Done
 
-- [ ] Option works
-- [ ] Result works
-- [ ] Vec primitives work
-- [ ] strings collections work
-- [ ] large array tests
-- [ ] error tests
+- [x] Option works
+- [x] Result works
+- [x] Vec primitives work
+- [x] strings collections work
+- [x] large array tests
+- [x] error tests
 
 ### Suggested Release
 
@@ -1381,14 +1381,14 @@ leak detection in tests
 
 ### Definition of Done
 
-- [ ] constructors
-- [ ] methods
-- [ ] immutable methods
-- [ ] mutable methods
-- [ ] destruction
-- [ ] invalid handle detection
-- [ ] double-close safety
-- [ ] stress tests
+- [x] constructors
+- [x] methods
+- [x] immutable methods
+- [x] mutable methods
+- [x] destruction
+- [x] invalid handle detection
+- [x] double-close safety
+- [x] stress tests
 
 ### Suggested Release
 

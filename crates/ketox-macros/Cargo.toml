@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Export validation and metadata for Ketox"
+repository.workspace = true
 
 [lib]
 proc-macro = true

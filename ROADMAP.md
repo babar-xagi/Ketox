@@ -1,10 +1,10 @@
-# Ketox development roadmap
+# ketox3 development roadmap
 
-The project goal is to make Rust libraries natural and safe to call from Kotlin. The current implementation targets Kotlin/JVM and establishes the development milestones.
+The project goal is to make Rust libraries natural, safe, and performant to call from Kotlin. The current implementation targets Kotlin/JVM and establishes progressive development milestones.
 
-The [full design and roadmap](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) remains the reference for future direction. Its phase numbers and proposed release versions are planning targets, not completed features or release commitments.
+The [full design and roadmap](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) remains the reference for long-term vision.
 
-## Milestone: Phase 0 & Phase 1 (Completed)
+## Milestone: Phase 0 & Phase 1 — Functions MVP (Completed)
 
 - [x] Rename the project and package namespace to Ketox.
 - [x] Set up the Cargo workspace and user-facing `ketox` crate.
@@ -31,20 +31,33 @@ The [full design and roadmap](KETOX_FULL_PROJECT_DESIGN_AND_ROADMAP.md) remains 
 - [x] Update codegen and runtime for automatic conversion between Kotlin/JNI and Rust types.
 - [x] Verify end-to-end on JVM with `-Xcheck:jni` covering all Phase 2 features.
 
+## Milestone: Phase 3 — Rust Structs ↔ Kotlin Classes (Completed)
+
+- [x] Extend metadata schema to version 3 with `classes`, `constructors`, and `methods`.
+- [x] Add `#[kotlin_class]` attribute macro for exporting Rust structs.
+- [x] Add `#[kotlin_constructor]` attribute macro and recognition of `new` / `Self` / `Result<Self, E>` constructor returns.
+- [x] Extend `#[kotlin_export]` to support `impl StructName` blocks.
+- [x] Support methods with immutable `&self` and mutable `&mut self` receivers.
+- [x] Implement thread-safe `HANDLE_REGISTRY` in `ketox-jni` storing instances in `Arc<RwLock<T>>` for concurrent reads and exclusive writes.
+- [x] Implement robust handle lifecycle functions: `register_handle`, `get_handle_arc`, `with_handle`, `with_handle_mut`, and `destroy_handle`.
+- [x] Implement stale-handle and double-close protection (`IllegalStateException` on stale handle use; safe idempotent double close).
+- [x] Implement cross-type parameter references (e.g. `fn dot(&self, other: &Vector) -> f64`).
+- [x] Generate Kotlin classes implementing `java.lang.AutoCloseable` with `nativeHandle: Long`, `checkAlive()`, methods, and `close()`.
+- [x] Verify complete Phase 3 on JVM with `-Xcheck:jni` covering instantiation, methods, mutation, cross-class calls, `.use { ... }`, stale handles, and double closes.
+
 ## Validation status
 
 | Environment | Status |
 | --- | --- |
 | Local Windows Rust checks | All tests, lints (`clippy -D warnings`), and formatting pass |
-| Local Windows JVM checks | Passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays |
+| Local Windows JVM checks | Passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Vector class, methods, mutation, AutoCloseable, stale handle protection |
 | GitHub Actions Windows/Linux/macOS | Configured; tested locally |
 | Rust minimum-version check | Verified |
 | Android and Kotlin/Native | Planned for future phases |
 
-## Next work (Phase 3)
+## Next work (Phase 4)
 
-1. Design explicit native ownership, opaque handles, and stale-handle protection for exported Rust structs/classes.
-2. Implement struct/class exports with constructor methods, methods, and automatic destructors (`AutoCloseable` in Kotlin).
-3. Rich collections (e.g. `Vec<String>`, maps) and complex object graphs.
-4. Callbacks, Kotlin coroutines, and async integration.
-5. Android distribution and Gradle plugin integration.
+1. Enums and data models: Rust enums ↔ Kotlin enums and sealed classes mapping.
+2. Rich collections: `Vec<String>`, maps, and nested data structures.
+3. Callbacks, Kotlin coroutines, and async integration.
+4. Android distribution (AAR packaging) and Gradle plugin integration.

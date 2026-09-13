@@ -117,8 +117,163 @@ fn generate_kotlin(module: &Module) -> String {
         )
         .unwrap();
     }
+    for class in &module.classes {
+        for constructor in &class.constructors {
+            let parameters = constructor
+                .parameters
+                .iter()
+                .map(|p| format!("{}: kotlin.{}", p.name, kotlin_jni_type(&p.ty)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(
+                output,
+                "\n    external fun __ketox_{}_{}({parameters}): kotlin.Long",
+                class.rust_name, constructor.rust_name
+            )
+            .unwrap();
+        }
+        for method in &class.methods {
+            let mut params = vec!["__ketox_handle: kotlin.Long".to_owned()];
+            for p in &method.parameters {
+                params.push(format!("{}: kotlin.{}", p.name, kotlin_jni_type(&p.ty)));
+            }
+            let param_str = params.join(", ");
+            writeln!(
+                output,
+                "\n    external fun __ketox_{}_{}({param_str}): kotlin.{}",
+                class.rust_name,
+                method.rust_name,
+                kotlin_jni_type(&method.return_type)
+            )
+            .unwrap();
+        }
+        writeln!(
+            output,
+            "\n    external fun __ketox_{}_destroy(__ketox_handle: kotlin.Long): kotlin.Unit",
+            class.rust_name
+        )
+        .unwrap();
+    }
     output.push_str("}\n");
+
+    for class in &module.classes {
+        writeln!(
+            output,
+            "\nclass {} internal constructor(\n    internal var nativeHandle: kotlin.Long\n) : java.lang.AutoCloseable {{",
+            class.kotlin_name
+        )
+        .unwrap();
+        for constructor in &class.constructors {
+            let ctor_params = constructor
+                .parameters
+                .iter()
+                .map(|p| format!("{}: {}", p.name, kotlin_qualified_type(&p.ty)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut ctor_args = Vec::new();
+            for p in &constructor.parameters {
+                if matches!(p.ty, Type::Class(_)) {
+                    ctor_args.push(format!("{}.nativeHandle", p.name));
+                } else {
+                    ctor_args.push(p.name.clone());
+                }
+            }
+            let args_str = ctor_args.join(", ");
+            writeln!(
+                output,
+                "    constructor({ctor_params}) : this({}.__ketox_{}_{}({args_str}))",
+                module.class_name, class.rust_name, constructor.rust_name
+            )
+            .unwrap();
+        }
+        for method in &class.methods {
+            let method_params = method
+                .parameters
+                .iter()
+                .map(|p| format!("{}: {}", p.name, kotlin_qualified_type(&p.ty)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(
+                output,
+                "\n    fun {}({method_params}): {} {{",
+                method.kotlin_name,
+                kotlin_qualified_type(&method.return_type)
+            )
+            .unwrap();
+            writeln!(output, "        checkAlive()").unwrap();
+            for p in &method.parameters {
+                if matches!(p.ty, Type::Class(_)) {
+                    writeln!(output, "        {}.checkAlive()", p.name).unwrap();
+                }
+            }
+            let mut call_args = vec!["nativeHandle".to_owned()];
+            for p in &method.parameters {
+                if matches!(p.ty, Type::Class(_)) {
+                    call_args.push(format!("{}.nativeHandle", p.name));
+                } else {
+                    call_args.push(p.name.clone());
+                }
+            }
+            let call_args_str = call_args.join(", ");
+            let call_expr = format!(
+                "{}.__ketox_{}_{}({call_args_str})",
+                module.class_name, class.rust_name, method.rust_name
+            );
+            match &method.return_type {
+                Type::Unit => {
+                    writeln!(output, "        {call_expr}").unwrap();
+                }
+                Type::Class(ret_class) => {
+                    writeln!(output, "        val __ketox_res_handle = {call_expr}").unwrap();
+                    writeln!(output, "        return {ret_class}(__ketox_res_handle)").unwrap();
+                }
+                _ => {
+                    writeln!(output, "        return {call_expr}").unwrap();
+                }
+            }
+            writeln!(output, "    }}").unwrap();
+        }
+        writeln!(output, "\n    internal fun checkAlive() {{").unwrap();
+        writeln!(output, "        if (nativeHandle == 0L) {{").unwrap();
+        writeln!(
+            output,
+            "            throw java.lang.IllegalStateException(\"{} is closed or uninitialized\")",
+            class.kotlin_name
+        )
+        .unwrap();
+        writeln!(output, "        }}").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output, "\n    override fun close() {{").unwrap();
+        writeln!(output, "        if (nativeHandle != 0L) {{").unwrap();
+        writeln!(output, "            val handle = nativeHandle").unwrap();
+        writeln!(output, "            nativeHandle = 0L").unwrap();
+        writeln!(
+            output,
+            "            {}.__ketox_{}_destroy(handle)",
+            module.class_name, class.rust_name
+        )
+        .unwrap();
+        writeln!(output, "        }}").unwrap();
+        writeln!(output, "    }}").unwrap();
+        writeln!(output, "}}").unwrap();
+    }
     output
+}
+
+fn kotlin_qualified_type(ty: &Type) -> String {
+    match ty {
+        Type::Class(name) => name.clone(),
+        Type::Option(inner) => format!("{}?", kotlin_qualified_type(inner)),
+        _ => format!("kotlin.{}", ty.kotlin_type()),
+    }
+}
+
+fn kotlin_jni_type(ty: &Type) -> String {
+    match ty {
+        Type::Class(_) => "Long".to_owned(),
+        Type::Result { ok, .. } => kotlin_jni_type(ok),
+        _ => ty.kotlin_type(),
+    }
 }
 
 fn generate_rust(module: &Module) -> String {
@@ -191,6 +346,175 @@ fn generate_rust(module: &Module) -> String {
         .unwrap();
         let ret_code = generate_return_conversion(&function.return_type, "__ketox_result");
         writeln!(output, "        {ret_code}").unwrap();
+        output.push_str("    })\n}\n");
+    }
+
+    for class in &module.classes {
+        for constructor in &class.constructors {
+            let fn_name = format!("__ketox_{}_{}", class.rust_name, constructor.rust_name);
+            let symbol = format!("Java_{}_{}", class_symbol, jni_escape(&fn_name));
+            writeln!(
+                output,
+                "\n// JNI constructor: {}",
+                constructor.jni_signature()
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "// SAFETY: this symbol uniquely identifies the validated Kotlin native method."
+            )
+            .unwrap();
+            writeln!(output, "#[unsafe(no_mangle)]").unwrap();
+            writeln!(output, "#[allow(non_snake_case)]").unwrap();
+            writeln!(output, "pub extern \"system\" fn {symbol}<'local>(").unwrap();
+            writeln!(output, "    mut __ketox_env: ::ketox::jni::JNIEnv<'local>,").unwrap();
+            writeln!(output, "    _this: ::ketox::jni::objects::JObject<'local>,").unwrap();
+            for (index, parameter) in constructor.parameters.iter().enumerate() {
+                writeln!(
+                    output,
+                    "    __ketox_arg_{index}: {},",
+                    jni_rust_type(&parameter.ty, true)
+                )
+                .unwrap();
+            }
+            writeln!(output, ") -> ::ketox::jni::sys::jlong {{").unwrap();
+            writeln!(
+                output,
+                "    ::ketox::runtime::boundary(&mut __ketox_env, 0, |__ketox_env| {{"
+            )
+            .unwrap();
+            let mut arguments = Vec::with_capacity(constructor.parameters.len());
+            for (index, parameter) in constructor.parameters.iter().enumerate() {
+                let argument = format!("__ketox_arg_{index}");
+                arguments.push(generate_argument_conversion(
+                    &parameter.ty,
+                    index,
+                    &argument,
+                    &mut output,
+                ));
+            }
+            writeln!(
+                output,
+                "        let __ketox_result = crate::{}::{}({});",
+                class.rust_name,
+                constructor.rust_name,
+                arguments.join(", ")
+            )
+            .unwrap();
+            let ret_code = generate_return_conversion(&constructor.return_type, "__ketox_result");
+            writeln!(output, "        {ret_code}").unwrap();
+            output.push_str("    })\n}\n");
+        }
+
+        for method in &class.methods {
+            let fn_name = format!("__ketox_{}_{}", class.rust_name, method.rust_name);
+            let symbol = format!("Java_{}_{}", class_symbol, jni_escape(&fn_name));
+            writeln!(output, "\n// JNI method: {}", method.jni_signature()).unwrap();
+            writeln!(
+                output,
+                "// SAFETY: this symbol uniquely identifies the validated Kotlin native method."
+            )
+            .unwrap();
+            writeln!(output, "#[unsafe(no_mangle)]").unwrap();
+            writeln!(output, "#[allow(non_snake_case)]").unwrap();
+            writeln!(output, "pub extern \"system\" fn {symbol}<'local>(").unwrap();
+            writeln!(output, "    mut __ketox_env: ::ketox::jni::JNIEnv<'local>,").unwrap();
+            writeln!(output, "    _this: ::ketox::jni::objects::JObject<'local>,").unwrap();
+            writeln!(output, "    __ketox_handle: ::ketox::jni::sys::jlong,").unwrap();
+            for (index, parameter) in method.parameters.iter().enumerate() {
+                writeln!(
+                    output,
+                    "    __ketox_arg_{index}: {},",
+                    jni_rust_type(&parameter.ty, true)
+                )
+                .unwrap();
+            }
+            let unit_return = is_unit(&method.return_type);
+            if unit_return {
+                writeln!(output, ") {{").unwrap();
+            } else {
+                writeln!(
+                    output,
+                    ") -> {} {{",
+                    jni_rust_type(&method.return_type, false)
+                )
+                .unwrap();
+            }
+            writeln!(
+                output,
+                "    ::ketox::runtime::boundary(&mut __ketox_env, {}, |__ketox_env| {{",
+                jni_default(&method.return_type)
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "        let __ketox_self_arc = ::ketox::runtime::get_handle_arc::<crate::{}>(__ketox_handle)?;",
+                class.rust_name
+            )
+            .unwrap();
+            if method.is_mut {
+                writeln!(
+                    output,
+                    "        let mut __ketox_self_guard = __ketox_self_arc.write().map_err(|_| ::ketox::runtime::BridgeError::new(\"java/lang/IllegalStateException\", \"handle lock poisoned\"))?;\n        let __ketox_self = __ketox_self_guard.downcast_mut::<crate::{}>().ok_or_else(|| ::ketox::runtime::BridgeError::new(\"java/lang/IllegalStateException\", \"handle type mismatch\"))?;",
+                    class.rust_name
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    output,
+                    "        let __ketox_self_guard = __ketox_self_arc.read().map_err(|_| ::ketox::runtime::BridgeError::new(\"java/lang/IllegalStateException\", \"handle lock poisoned\"))?;\n        let __ketox_self = __ketox_self_guard.downcast_ref::<crate::{}>().ok_or_else(|| ::ketox::runtime::BridgeError::new(\"java/lang/IllegalStateException\", \"handle type mismatch\"))?;",
+                    class.rust_name
+                )
+                .unwrap();
+            }
+            let mut arguments = Vec::with_capacity(method.parameters.len());
+            for (index, parameter) in method.parameters.iter().enumerate() {
+                let argument = format!("__ketox_arg_{index}");
+                arguments.push(generate_argument_conversion(
+                    &parameter.ty,
+                    index,
+                    &argument,
+                    &mut output,
+                ));
+            }
+            let result_binding = if method.return_type == Type::Unit {
+                ""
+            } else {
+                "let __ketox_result = "
+            };
+            writeln!(
+                output,
+                "        {result_binding}__ketox_self.{}({});",
+                method.rust_name,
+                arguments.join(", ")
+            )
+            .unwrap();
+            let ret_code = generate_return_conversion(&method.return_type, "__ketox_result");
+            writeln!(output, "        {ret_code}").unwrap();
+            output.push_str("    })\n}\n");
+        }
+
+        let fn_name = format!("__ketox_{}_destroy", class.rust_name);
+        let symbol = format!("Java_{}_{}", class_symbol, jni_escape(&fn_name));
+        writeln!(output, "\n// JNI destructor: {symbol}").unwrap();
+        writeln!(output, "#[unsafe(no_mangle)]").unwrap();
+        writeln!(output, "#[allow(non_snake_case)]").unwrap();
+        writeln!(output, "pub extern \"system\" fn {symbol}<'local>(").unwrap();
+        writeln!(output, "    mut __ketox_env: ::ketox::jni::JNIEnv<'local>,").unwrap();
+        writeln!(output, "    _this: ::ketox::jni::objects::JObject<'local>,").unwrap();
+        writeln!(output, "    __ketox_handle: ::ketox::jni::sys::jlong,").unwrap();
+        writeln!(output, ") {{").unwrap();
+        writeln!(
+            output,
+            "    ::ketox::runtime::boundary(&mut __ketox_env, (), |_| {{"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "        ::ketox::runtime::destroy_handle::<crate::{}>(__ketox_handle)",
+            class.rust_name
+        )
+        .unwrap();
         output.push_str("    })\n}\n");
     }
     output
@@ -496,6 +820,14 @@ fn generate_argument_conversion(
             }
             _ => argument.to_owned(),
         },
+        Type::Class(class_name) => {
+            writeln!(
+                output,
+                "        let __ketox_arc_{index} = ::ketox::runtime::get_handle_arc::<crate::{class_name}>({argument})?;\n        let __ketox_guard_{index} = __ketox_arc_{index}.read().map_err(|_| ::ketox::runtime::BridgeError::new(\"java/lang/IllegalStateException\", \"handle lock poisoned\"))?;\n        let __ketox_val_{index} = __ketox_guard_{index}.downcast_ref::<crate::{class_name}>().ok_or_else(|| ::ketox::runtime::BridgeError::new(\"java/lang/IllegalStateException\", \"handle type mismatch\"))?;"
+            )
+            .unwrap();
+            format!("__ketox_val_{index}")
+        }
         Type::Unit | Type::Result { .. } => argument.to_owned(),
     }
 }
@@ -528,6 +860,7 @@ fn generate_return_conversion(ty: &Type, expr: &str) -> String {
         Type::BooleanArray | Type::BooleanSlice => {
             format!("::ketox::runtime::write_boolean_array(__ketox_env, &{expr})")
         }
+        Type::Class(_) => format!("Ok(::ketox::runtime::register_handle({expr}))"),
         Type::Option(inner) => match inner.as_ref() {
             Type::String | Type::Str => {
                 format!("::ketox::runtime::write_opt_string(__ketox_env, {expr})")
@@ -571,6 +904,11 @@ fn generate_return_conversion(ty: &Type, expr: &str) -> String {
             Type::BooleanArray | Type::BooleanSlice => {
                 format!("::ketox::runtime::write_opt_boolean_array(__ketox_env, {expr})")
             }
+            Type::Class(_) => {
+                format!(
+                    "Ok(match {expr} {{\n                    Some(__ketox_inner) => ::ketox::runtime::register_handle(__ketox_inner),\n                    None => 0,\n                }})"
+                )
+            }
             _ => format!("Ok({expr})"),
         },
         Type::Result { ok, .. } => {
@@ -591,6 +929,7 @@ fn jni_rust_type(ty: &Type, input: bool) -> &'static str {
         Type::I64 => "::ketox::jni::sys::jlong",
         Type::F32 => "::ketox::jni::sys::jfloat",
         Type::F64 => "::ketox::jni::sys::jdouble",
+        Type::Class(_) => "::ketox::jni::sys::jlong",
         Type::String | Type::Str if input => "::ketox::jni::objects::JString<'local>",
         Type::String | Type::Str => "::ketox::jni::sys::jstring",
         Type::ByteArray | Type::ByteSlice if input => "::ketox::jni::objects::JByteArray<'local>",
@@ -880,5 +1219,62 @@ mod tests {
                 .rust
                 .contains("::ketox::runtime::BridgeError::user_error")
         );
+    }
+
+    #[test]
+    fn generates_phase_three_classes_and_valid_rust_syntax() {
+        let module = module(
+            r#"
+            #[kotlin_class]
+            pub struct Vector {
+                pub x: f64,
+                pub y: f64,
+            }
+
+            #[kotlin_export]
+            impl Vector {
+                #[kotlin_constructor]
+                pub fn new(x: f64, y: f64) -> Self {
+                    Self { x, y }
+                }
+
+                pub fn magnitude(&self) -> f64 {
+                    (self.x * self.x + self.y * self.y).sqrt()
+                }
+
+                pub fn scale(&mut self, factor: f64) {
+                    self.x *= factor;
+                    self.y *= factor;
+                }
+
+                pub fn dot(&self, other: &Vector) -> f64 {
+                    self.x * other.x + self.y * other.y
+                }
+            }
+            "#,
+        );
+        let generated = generate(&module).unwrap();
+        syn::parse_file(&generated.rust).expect("generated JNI glue should be valid Rust");
+        assert!(
+            generated
+                .kotlin
+                .contains("class Vector internal constructor(")
+        );
+        assert!(generated.kotlin.contains("constructor(x: kotlin.Double, y: kotlin.Double) : this(RustApi.__ketox_Vector_new(x, y))"));
+        assert!(generated.kotlin.contains("fun magnitude(): kotlin.Double"));
+        assert!(
+            generated
+                .kotlin
+                .contains("fun scale(factor: kotlin.Double): kotlin.Unit")
+        );
+        assert!(
+            generated
+                .kotlin
+                .contains("fun dot(other: Vector): kotlin.Double")
+        );
+        assert!(generated.kotlin.contains("override fun close()"));
+        assert!(generated.kotlin.contains("internal fun checkAlive()"));
+        assert!(generated.rust.contains("get_handle_arc::<crate::Vector>"));
+        assert!(generated.rust.contains("destroy_handle::<crate::Vector>"));
     }
 }

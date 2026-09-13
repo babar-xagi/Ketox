@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use syn::{spanned::Spanned, visit::Visit};
 
 /// The metadata version understood by this release.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,6 +18,58 @@ pub struct Module {
     pub class_name: String,
     pub library_name: String,
     pub functions: Vec<Function>,
+    #[serde(default)]
+    pub classes: Vec<Class>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Class {
+    pub rust_name: String,
+    pub kotlin_name: String,
+    pub constructors: Vec<Constructor>,
+    pub methods: Vec<Method>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Constructor {
+    pub rust_name: String,
+    pub parameters: Vec<Parameter>,
+    pub return_type: Type,
+}
+
+impl Constructor {
+    pub fn jni_signature(&self) -> String {
+        let mut signature = String::from("(");
+        for parameter in &self.parameters {
+            signature.push_str(&parameter.ty.jni_signature());
+        }
+        signature.push_str(")J");
+        signature
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Method {
+    pub rust_name: String,
+    pub kotlin_name: String,
+    pub is_mut: bool,
+    pub parameters: Vec<Parameter>,
+    pub return_type: Type,
+}
+
+impl Method {
+    pub fn jni_signature(&self) -> String {
+        let mut signature = String::from("(J");
+        for parameter in &self.parameters {
+            signature.push_str(&parameter.ty.jni_signature());
+        }
+        signature.push(')');
+        signature.push_str(&self.return_type.jni_signature());
+        signature
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +113,7 @@ pub enum Type {
     DoubleSlice,
     BooleanArray,
     BooleanSlice,
+    Class(String),
     Option(Box<Type>),
     Result { ok: Box<Type>, err: String },
 }
@@ -84,6 +137,7 @@ impl Type {
             Self::FloatArray | Self::FloatSlice => "FloatArray".to_owned(),
             Self::DoubleArray | Self::DoubleSlice => "DoubleArray".to_owned(),
             Self::BooleanArray | Self::BooleanSlice => "BooleanArray".to_owned(),
+            Self::Class(name) => name.clone(),
             Self::Option(inner) => format!("{}?", inner.kotlin_type()),
             Self::Result { ok, .. } => ok.kotlin_type(),
         }
@@ -107,6 +161,7 @@ impl Type {
             Self::FloatArray | Self::FloatSlice => "[F".to_owned(),
             Self::DoubleArray | Self::DoubleSlice => "[D".to_owned(),
             Self::BooleanArray | Self::BooleanSlice => "[Z".to_owned(),
+            Self::Class(_) => "J".to_owned(),
             Self::Option(inner) => match inner.as_ref() {
                 Self::Bool => "Ljava/lang/Boolean;".to_owned(),
                 Self::I8 => "Ljava/lang/Byte;".to_owned(),
@@ -122,6 +177,7 @@ impl Type {
                 Self::FloatArray | Self::FloatSlice => "[F".to_owned(),
                 Self::DoubleArray | Self::DoubleSlice => "[D".to_owned(),
                 Self::BooleanArray | Self::BooleanSlice => "[Z".to_owned(),
+                Self::Class(_) => "Ljava/lang/Long;".to_owned(),
                 _ => "Ljava/lang/Object;".to_owned(),
             },
             Self::Result { ok, .. } => ok.jni_signature(),
@@ -336,6 +392,10 @@ fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
                     "f32" => return Ok(Type::F32),
                     "f64" => return Ok(Type::F64),
                     "String" => return Ok(Type::String),
+                    "Self" => return Ok(Type::Class("Self".to_owned())),
+                    other if other.chars().next().is_some_and(|c| c.is_ascii_uppercase()) => {
+                        return Ok(Type::Class(other.to_owned()));
+                    }
                     _ => {}
                 },
                 syn::PathArguments::AngleBracketed(args) => {
@@ -421,6 +481,23 @@ fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
                 syn::Type::Path(path) if path.qself.is_none() && path.path.is_ident("str") => {
                     return Ok(Type::Str);
                 }
+                syn::Type::Path(path)
+                    if path.qself.is_none()
+                        && path.path.leading_colon.is_none()
+                        && path.path.segments.len() == 1 =>
+                {
+                    let ident = &path.path.segments[0].ident;
+                    let name = ident.to_string();
+                    if name != "String"
+                        && name != "Option"
+                        && name != "Result"
+                        && name != "Vec"
+                        && name != "Self"
+                        && name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    {
+                        return Ok(Type::Class(name));
+                    }
+                }
                 syn::Type::Slice(slice) => {
                     if let Some(name) = primitive_name(slice.elem.as_ref()) {
                         match name.as_str() {
@@ -451,6 +528,10 @@ fn parse_type(ty: &syn::Type, is_return: bool) -> syn::Result<Type> {
     ))
 }
 
+fn is_class(attribute: &syn::Attribute) -> bool {
+    matches!(attribute.path().get_ident(), Some(ident) if ident == "kotlin_class")
+}
+
 #[derive(Default)]
 struct NestedExportDetector {
     error: Option<syn::Error>,
@@ -461,7 +542,7 @@ impl<'ast> Visit<'ast> for NestedExportDetector {
         if self.error.is_none() && is_export(attribute) {
             self.error = Some(syn::Error::new(
                 attribute.span(),
-                "kotlin_export is supported only on top-level free functions; nested exports and exports on other items are unsupported",
+                "kotlin_export is supported only on top-level free functions and impl blocks; nested exports and exports on other items are unsupported",
             ));
         } else if self.error.is_none()
             && attribute.path().is_ident("cfg_attr")
@@ -488,12 +569,165 @@ pub fn parse_source(
 ) -> Result<Module, String> {
     let file = syn::parse_file(source).map_err(|error| format!("invalid Rust source: {error}"))?;
     let mut functions = Vec::new();
+    let mut classes_map: std::collections::BTreeMap<String, Class> =
+        std::collections::BTreeMap::new();
     let mut nested = NestedExportDetector::default();
     for attribute in &file.attrs {
         nested.visit_attribute(attribute);
     }
     for item in &file.items {
         match item {
+            syn::Item::Struct(item_struct) if item_struct.attrs.iter().any(is_class) => {
+                let rust_name = item_struct.ident.to_string();
+                validate_rust_identifier(&rust_name, "class name")
+                    .map_err(|e| syn::Error::new_spanned(&item_struct.ident, e).to_string())?;
+                let kotlin_name = rust_name.clone();
+                validate_kotlin_identifier(&kotlin_name, "class name")
+                    .map_err(|e| syn::Error::new_spanned(&item_struct.ident, e).to_string())?;
+                classes_map
+                    .entry(rust_name.clone())
+                    .or_insert_with(|| Class {
+                        rust_name,
+                        kotlin_name,
+                        constructors: Vec::new(),
+                        methods: Vec::new(),
+                    });
+            }
+            syn::Item::Impl(item_impl) if item_impl.attrs.iter().any(is_export) => {
+                let syn::Type::Path(self_path) = item_impl.self_ty.as_ref() else {
+                    return Err(
+                        "Ketox: #[kotlin_export] impl is only supported on struct types"
+                            .to_string(),
+                    );
+                };
+                let struct_ident = &self_path.path.segments.last().unwrap().ident;
+                let struct_name = struct_ident.to_string();
+                let class = classes_map
+                    .entry(struct_name.clone())
+                    .or_insert_with(|| Class {
+                        rust_name: struct_name.clone(),
+                        kotlin_name: struct_name.clone(),
+                        constructors: Vec::new(),
+                        methods: Vec::new(),
+                    });
+                for impl_item in &item_impl.items {
+                    if let syn::ImplItem::Fn(method) = impl_item {
+                        if !matches!(method.vis, syn::Visibility::Public(_)) {
+                            continue;
+                        }
+                        let first_arg = method.sig.inputs.first();
+                        let is_receiver = matches!(first_arg, Some(syn::FnArg::Receiver(_)));
+                        if is_receiver {
+                            let syn::FnArg::Receiver(receiver) = first_arg.unwrap() else {
+                                unreachable!()
+                            };
+                            if receiver.reference.is_none() {
+                                return Err(format!(
+                                    "method `{}` in `{}`: by-value `self` is unsupported; use `&self` or `&mut self`",
+                                    method.sig.ident, struct_name
+                                ));
+                            }
+                            let is_mut = receiver.mutability.is_some();
+                            let method_rust_name = method.sig.ident.to_string();
+                            let method_kotlin_name = kotlin_function_name(&method_rust_name)
+                                .map_err(|e| {
+                                    syn::Error::new_spanned(&method.sig.ident, e).to_string()
+                                })?;
+                            let mut params = Vec::new();
+                            for arg in method.sig.inputs.iter().skip(1) {
+                                let syn::FnArg::Typed(typed) = arg else {
+                                    continue;
+                                };
+                                let syn::Pat::Ident(pat) = typed.pat.as_ref() else {
+                                    return Err(
+                                        "parameter pattern must be simple identifier".to_string()
+                                    );
+                                };
+                                let name = pat.ident.to_string();
+                                let ty = parse_type(&typed.ty, false).map_err(|e| {
+                                    format!(
+                                        "method `{}` parameter `{}`: {e}",
+                                        method_rust_name, name
+                                    )
+                                })?;
+                                params.push(Parameter { name, ty });
+                            }
+                            let return_type = match &method.sig.output {
+                                syn::ReturnType::Default => Type::Unit,
+                                syn::ReturnType::Type(_, ty) => {
+                                    let mut t = parse_type(ty, true).map_err(|e| {
+                                        format!("method `{}` return type: {e}", method_rust_name)
+                                    })?;
+                                    if t == Type::Class("Self".to_string()) {
+                                        t = Type::Class(struct_name.clone());
+                                    }
+                                    t
+                                }
+                            };
+                            class.methods.push(Method {
+                                rust_name: method_rust_name,
+                                kotlin_name: method_kotlin_name,
+                                is_mut,
+                                parameters: params,
+                                return_type,
+                            });
+                            nested.visit_block(&method.block);
+                        } else {
+                            let method_rust_name = method.sig.ident.to_string();
+                            let mut params = Vec::new();
+                            for arg in &method.sig.inputs {
+                                let syn::FnArg::Typed(typed) = arg else {
+                                    continue;
+                                };
+                                let syn::Pat::Ident(pat) = typed.pat.as_ref() else {
+                                    return Err(
+                                        "parameter pattern must be simple identifier".to_string()
+                                    );
+                                };
+                                let name = pat.ident.to_string();
+                                let ty = parse_type(&typed.ty, false).map_err(|e| {
+                                    format!(
+                                        "constructor `{}` parameter `{}`: {e}",
+                                        method_rust_name, name
+                                    )
+                                })?;
+                                params.push(Parameter { name, ty });
+                            }
+                            let return_type = match &method.sig.output {
+                                syn::ReturnType::Default => {
+                                    return Err(format!(
+                                        "constructor `{}` in `{}` must return Self or Result<Self, E>",
+                                        method_rust_name, struct_name
+                                    ));
+                                }
+                                syn::ReturnType::Type(_, ty) => {
+                                    let mut t = parse_type(ty, true).map_err(|e| {
+                                        format!(
+                                            "constructor `{}` return type: {e}",
+                                            method_rust_name
+                                        )
+                                    })?;
+                                    if t == Type::Class("Self".to_string()) {
+                                        t = Type::Class(struct_name.clone());
+                                    }
+                                    if let Type::Result { ref mut ok, .. } = t
+                                        && **ok == Type::Class("Self".to_string())
+                                    {
+                                        **ok = Type::Class(struct_name.clone());
+                                    }
+                                    t
+                                }
+                            };
+                            class.constructors.push(Constructor {
+                                rust_name: method_rust_name,
+                                parameters: params,
+                                return_type,
+                            });
+                            nested.visit_block(&method.block);
+                        }
+                    }
+                }
+            }
             syn::Item::Fn(function) if function.attrs.iter().any(is_export) => {
                 functions.push(
                     parse_function(function)
@@ -507,16 +741,25 @@ pub fn parse_source(
     if let Some(error) = nested.error {
         return Err(error.to_string());
     }
-    if !functions.is_empty() {
+    if !functions.is_empty() || !classes_map.is_empty() {
         reject_configuration(&file.attrs).map_err(|error| error.to_string())?;
     }
     functions.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
+    let mut classes = classes_map.into_values().collect::<Vec<_>>();
+    for class in &mut classes {
+        class.methods.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
+        class
+            .constructors
+            .sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
+    }
+    classes.sort_by(|a, b| a.rust_name.cmp(&b.rust_name));
     let module = Module {
         schema_version: SCHEMA_VERSION,
         package: package.to_owned(),
         class_name: class_name.to_owned(),
         library_name: library_name.to_owned(),
         functions,
+        classes,
     };
     validate_module(&module)?;
     Ok(module)
@@ -526,9 +769,12 @@ pub fn parse_source(
 ///
 /// Unlike source discovery, this does not reorder functions or modify metadata.
 pub fn validate_module(module: &Module) -> Result<(), String> {
-    if module.schema_version != 1 && module.schema_version != SCHEMA_VERSION {
+    if module.schema_version != 1
+        && module.schema_version != 2
+        && module.schema_version != SCHEMA_VERSION
+    {
         return Err(format!(
-            "unsupported metadata schema version {}; expected 1 or {SCHEMA_VERSION}",
+            "unsupported metadata schema version {}; expected 1, 2, or {SCHEMA_VERSION}",
             module.schema_version
         ));
     }
@@ -553,6 +799,112 @@ pub fn validate_module(module: &Module) -> Result<(), String> {
                 function.kotlin_name
             ));
         }
+        for param in &function.parameters {
+            validate_class_reference(&param.ty, &module.classes, &function.rust_name)?;
+        }
+        validate_class_reference(&function.return_type, &module.classes, &function.rust_name)?;
+    }
+    for class in &module.classes {
+        validate_class(class)?;
+        if !rust_names.insert(&class.rust_name) {
+            return Err(format!("duplicate exported item `{}`", class.rust_name));
+        }
+        if !kotlin_names.insert(&class.kotlin_name) {
+            return Err(format!(
+                "exported items collide on Kotlin name `{}`",
+                class.kotlin_name
+            ));
+        }
+        for constructor in &class.constructors {
+            for param in &constructor.parameters {
+                validate_class_reference(&param.ty, &module.classes, &constructor.rust_name)?;
+            }
+            validate_class_reference(
+                &constructor.return_type,
+                &module.classes,
+                &constructor.rust_name,
+            )?;
+        }
+        for method in &class.methods {
+            for param in &method.parameters {
+                validate_class_reference(&param.ty, &module.classes, &method.rust_name)?;
+            }
+            validate_class_reference(&method.return_type, &module.classes, &method.rust_name)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_class_reference(ty: &Type, classes: &[Class], context: &str) -> Result<(), String> {
+    match ty {
+        Type::Class(name) => {
+            if !classes.iter().any(|c| c.rust_name == *name) {
+                return Err(format!(
+                    "unrecognized class `{name}` in `{context}`; exported classes must be defined in the same module"
+                ));
+            }
+            Ok(())
+        }
+        Type::Option(inner) => validate_class_reference(inner, classes, context),
+        Type::Result { ok, .. } => validate_class_reference(ok, classes, context),
+        _ => Ok(()),
+    }
+}
+
+fn validate_class(class: &Class) -> Result<(), String> {
+    validate_kotlin_identifier(&class.kotlin_name, "class name")?;
+    validate_rust_identifier(&class.rust_name, "class name")?;
+    for constructor in &class.constructors {
+        validate_rust_identifier(&constructor.rust_name, "constructor name")?;
+        let mut param_names = HashSet::new();
+        for param in &constructor.parameters {
+            validate_kotlin_identifier(&param.name, "parameter")?;
+            validate_rust_identifier(&param.name, "parameter")?;
+            if !param_names.insert(&param.name) {
+                return Err(format!(
+                    "duplicate parameter `{}` in constructor `{}` of class `{}`",
+                    param.name, constructor.rust_name, class.rust_name
+                ));
+            }
+            validate_type_position(&param.ty, false, &constructor.rust_name)?;
+        }
+        validate_type_position(&constructor.return_type, true, &constructor.rust_name)?;
+    }
+    let mut method_names = HashSet::new();
+    let mut method_kt_names = HashSet::new();
+    for method in &class.methods {
+        let expected = kotlin_function_name(&method.rust_name)?;
+        if method.kotlin_name != expected {
+            return Err(format!(
+                "Kotlin name `{}` for Rust method `{}` must be `{expected}`",
+                method.kotlin_name, method.rust_name
+            ));
+        }
+        if !method_names.insert(&method.rust_name) {
+            return Err(format!(
+                "duplicate method `{}` in class `{}`",
+                method.rust_name, class.rust_name
+            ));
+        }
+        if !method_kt_names.insert(&method.kotlin_name) {
+            return Err(format!(
+                "methods collide on Kotlin name `{}` in class `{}`",
+                method.kotlin_name, class.rust_name
+            ));
+        }
+        let mut param_names = HashSet::new();
+        for param in &method.parameters {
+            validate_kotlin_identifier(&param.name, "parameter")?;
+            validate_rust_identifier(&param.name, "parameter")?;
+            if !param_names.insert(&param.name) {
+                return Err(format!(
+                    "duplicate parameter `{}` in method `{}` of class `{}`",
+                    param.name, method.rust_name, class.rust_name
+                ));
+            }
+            validate_type_position(&param.ty, false, &method.rust_name)?;
+        }
+        validate_type_position(&method.return_type, true, &method.rust_name)?;
     }
     Ok(())
 }
@@ -629,6 +981,14 @@ fn validate_type_position(ty: &Type, is_return: bool, func_name: &str) -> Result
                 ));
             }
             validate_type_position(ok, is_return, func_name)
+        }
+        Type::Class(name) => {
+            if name == "Self" {
+                return Err(format!("unresolved Self in `{func_name}`"));
+            }
+            validate_rust_identifier(name, "class")?;
+            validate_kotlin_identifier(name, "class")?;
+            Ok(())
         }
         _ => Ok(()),
     }

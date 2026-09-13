@@ -28,6 +28,7 @@ The JVM backend accepts the following types. Inputs and outputs use the same sig
 | `&[bool]` | `BooleanArray` | `[Z` | Yes | No |
 | `Option<T>` (where `T` is supported) | `T?` | Boxed / Object (e.g. `Ljava/lang/Integer;`) | Yes | Yes |
 | `Result<T, E>` (where `T` is supported, `E: Display`) | `T` (or throws `RuntimeException`) | Return descriptor of `T` | No | Yes |
+| `ClassName` (annotated with `#[kotlin_class]`) | `ClassName` | `J` (handle) / `L<package>/<ClassName>;` | Yes (as `&ClassName`) | Yes (as `ClassName` or `Result<ClassName, E>`) |
 
 JNI method descriptors concatenate input descriptors inside parentheses followed by the result descriptor: `add(i32, i32) -> i32` has `(II)I`. The mapping follows the [JNI type-signature rules](https://docs.oracle.com/en/java/javase/21/docs/specs/jni/types.html#type-signatures).
 
@@ -55,12 +56,23 @@ Array inputs copy elements into owned Rust vectors or temporary slices for the d
 
 ## Results and Error Handling
 
-`Result<T, E>` is supported as a function return type where `E` implements `std::fmt::Display`.
+`Result<T, E>` is supported as a function or constructor return type where `E` implements `std::fmt::Display`.
 - On `Ok(value)`, the inner value is converted and returned to the Kotlin caller normally.
 - On `Err(error)`, Ketox catches the error and raises a JVM `java.lang.RuntimeException` with the message formatted from the error.
 
+## Rust Structs ↔ Kotlin Classes (Phase 3)
+
+Rust structs annotated with `#[kotlin_class]` are exposed as Kotlin classes implementing `java.lang.AutoCloseable`:
+- **Constructors:** Associated functions annotated with `#[kotlin_constructor]` returning `Self` or `Result<Self, E>` become Kotlin class constructors.
+- **Methods:** Functions declared inside `#[kotlin_export] impl StructName` blocks taking `&self` or `&mut self` become instance methods on the Kotlin class.
+- **Cross-Type Parameters:** Methods can take borrowed references to exported structs (e.g. `fn dot(&self, other: &Vector) -> f64`).
+- **Memory & Handles:** Instances are held in a thread-safe registry (`HANDLE_REGISTRY`) managed by `ketox-jni`, keyed by a 64-bit integer handle (`nativeHandle: Long`).
+- **Safe Concurrency:** Handlers are wrapped in `Arc<RwLock<T>>`, allowing concurrent `&self` read access and safe serialized `&mut self` write access across threads.
+- **Lifecycle & Disposal:** The Kotlin class implements `java.lang.AutoCloseable`. Calling `close()` or using Kotlin's `.use { ... }` block invokes the native destructor and safely releases the handle.
+- **Stale Handle Protection:** Calling methods on a closed or invalid handle throws `IllegalStateException`. Double-closing is safe and idempotent.
+
 ## Rejected types and declarations
 
-Unsigned integers (other than element type in `Vec<u8>` / `&[u8]`), pointer-sized integers (`usize`, `isize`), `char`, raw pointers, arbitrary references, tuples other than a Unit return, non-primitive collections, nested options (`Option<Option<T>>`), nested results, structs, enums, callbacks, and futures are unsupported in this phase. Fully qualified type names and type aliases are not resolved; use the exact supported spellings in exported signatures.
+Unsigned integers (other than element type in `Vec<u8>` / `&[u8]`), pointer-sized integers (`usize`, `isize`), `char`, raw pointers, arbitrary unannotated references, tuples other than a Unit return, non-primitive collections, nested options (`Option<Option<T>>`), nested results, enums, callbacks, and futures are unsupported in this phase. Fully qualified type names and type aliases are not resolved; use the exact supported spellings in exported signatures.
 
 Borrowed returns and explicit reference lifetimes are rejected. Exports must be safe, synchronous, non-generic functions, with simple named parameters.

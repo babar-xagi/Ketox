@@ -66,6 +66,32 @@ fun main() {
     check(RustApi.optAdd(null, 20) == 20)
     check(RustApi.optAdd(null, null) == null)
 
+    // Phase 3: Structs & Classes
+    val v1 = Vector(3.0, 4.0)
+    check(Math.abs(v1.magnitude() - 5.0) < 1e-6)
+    check(v1.toStringRepr() == "Vector(3, 4)")
+    v1.scale(2.0)
+    check(Math.abs(v1.magnitude() - 10.0) < 1e-6)
+    check(v1.toStringRepr() == "Vector(6, 8)")
+
+    val v2 = Vector(1.0, 2.0)
+    val dotProduct = v1.dot(v2)
+    check(Math.abs(dotProduct - 22.0) < 1e-6)
+
+    // AutoCloseable .use { ... }
+    Vector(5.0, 12.0).use { v ->
+        check(Math.abs(v.magnitude() - 13.0) < 1e-6)
+    }
+
+    // Stale handle protection: after close(), methods throw IllegalStateException
+    v1.close()
+    expectFailure<IllegalStateException> { v1.magnitude() }
+
+    // Double close idempotency
+    v1.close()
+
+    v2.close()
+
     val threads = (1..4).map { worker ->
         Thread {
             repeat(100) { check(RustApi.echo("thread-$worker-🦀") == "thread-$worker-🦀") }
@@ -79,5 +105,5 @@ fun main() {
     threads.forEach { it.join() }
     check(failures.isEmpty()) { "Concurrent JNI calls failed: $failures" }
     println(RustApi.hello("Kotlin"))
-    println("Ketox JVM smoke tests passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays")
+    println("Ketox JVM smoke tests passed: primitives, strings, nulls, Unicode, limits, panics, threads, Option, Result, ByteArrays, IntArrays, Classes, Structs, Lifecycle")
 }

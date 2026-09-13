@@ -6,6 +6,7 @@ resolver = "2"
 version = "0.0.1"
 edition = "2024"
 rust-version = "1.88"
+repository = "https://github.com/babar-xagi/ketox3"
 
 [workspace.dependencies]
 ketox = { path = "crates/ketox" }

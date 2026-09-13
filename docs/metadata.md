@@ -1,10 +1,10 @@
-# Ketox metadata version 1
+# Ketox metadata version 3
 
-`ketox-core::Module` is the in-memory contract. `ketox-metadata.json` is its serialized representation. The [JSON schema](metadata.schema.json) describes the initial structural shape; `ketox-core::validate_module` additionally enforces naming rules, derived Kotlin names, uniqueness, and supported positions for types.
+`ketox-core::Module` is the in-memory contract. `ketox-metadata.json` is its serialized representation. The [JSON schema](metadata.schema.json) describes the structural shape for schema versions 1, 2, and 3; `ketox-core::validate_module` additionally enforces naming rules, derived Kotlin names, uniqueness, and supported positions for types.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "package": "dev.ketox.example",
   "class_name": "RustApi",
   "library_name": "ketox_hello",
@@ -18,14 +18,52 @@
       ],
       "return_type": "i32"
     }
+  ],
+  "classes": [
+    {
+      "rust_name": "Vector",
+      "kotlin_name": "Vector",
+      "constructors": [
+        {
+          "rust_name": "new",
+          "kotlin_name": "new",
+          "parameters": [
+            { "name": "x", "ty": "f64" },
+            { "name": "y", "ty": "f64" }
+          ],
+          "return_type": { "class": "Vector" }
+        }
+      ],
+      "methods": [
+        {
+          "rust_name": "magnitude",
+          "kotlin_name": "magnitude",
+          "is_mut": false,
+          "parameters": [],
+          "return_type": "f64"
+        },
+        {
+          "rust_name": "scale",
+          "kotlin_name": "scale",
+          "is_mut": true,
+          "parameters": [
+            { "name": "factor", "ty": "f64" }
+          ],
+          "return_type": "unit"
+        }
+      ]
+    }
   ]
 }
 ```
 
-Types serialize as `bool`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `string`, `str`, or `unit`. `str` is input-only and `unit` is return-only. The shared model derives JVM method descriptors rather than trusting an extra serialized signature field.
+Types serialize as:
+- Primitives: `bool`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `string`, `str`, `unit`
+- Arrays: `byte_array`, `byte_slice`, `int_array`, `int_slice`, `long_array`, `long_slice`, `float_array`, `float_slice`, `double_array`, `double_slice`, `boolean_array`, `boolean_slice`
+- Option: `{"option": <type>}`
+- Result: `{"result": {"ok": <type>, "err": "<error_type>"}}`
+- Class: `{"class": "<class_name>"}`
 
-Source discovery sorts functions by Rust name. Code generation preserves the order supplied in validated metadata and emits fixed formatting, without timestamps or machine-specific paths in generated content. Reusing identical metadata yields identical artifacts. JSON consumers must reject unsupported schema versions and unknown fields rather than guessing their meaning.
+Source discovery sorts functions and classes by their Rust names. Code generation preserves the order supplied in validated metadata and emits fixed formatting, without timestamps or machine-specific paths in generated content. Reusing identical metadata yields identical artifacts. JSON consumers must reject unsupported schema versions and unknown fields rather than guessing their meaning.
 
-The export macro also emits a hidden `__ketox_metadata_<rust_name>` JSON string constant containing the corresponding function record. It performs no filesystem writes. Build-script codegen scans the selected source file with the same validator and wraps discovered function records in the module-level settings. The macro constants are useful for inspection; they are not a binary metadata-discovery mechanism.
-
-Version 1 is a prototype contract, not a promise that every future release will use this format unchanged. Changes to serialized meaning must use an explicit schema/version policy and paired generator/runtime changes. Consumers should keep generated Kotlin, JNI glue, and the native library from the same build.
+Version 3 introduces support for exported structs and classes, stateful handles, constructors, methods (`&self` and `&mut self`), and destructors.

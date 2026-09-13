@@ -334,3 +334,55 @@ fn allows_documentation_and_passive_function_attributes() {
     )
     .unwrap();
 }
+
+#[test]
+fn parses_phase_three_exported_classes_and_methods() {
+    let module = source(
+        r#"
+        #[kotlin_class]
+        pub struct Vector {
+            x: f64,
+            y: f64,
+        }
+
+        #[kotlin_export]
+        impl Vector {
+            #[kotlin_constructor]
+            pub fn new(x: f64, y: f64) -> Self {
+                Self { x, y }
+            }
+
+            pub fn magnitude(&self) -> f64 {
+                (self.x * self.x + self.y * self.y).sqrt()
+            }
+
+            pub fn scale(&mut self, factor: f64) {
+                self.x *= factor;
+                self.y *= factor;
+            }
+
+            pub fn dot(&self, other: &Vector) -> f64 {
+                self.x * other.x + self.y * other.y
+            }
+        }
+    "#,
+    )
+    .unwrap();
+    assert_eq!(module.classes.len(), 1);
+    let class = &module.classes[0];
+    assert_eq!(class.rust_name, "Vector");
+    assert_eq!(class.kotlin_name, "Vector");
+    assert_eq!(class.constructors.len(), 1);
+    assert_eq!(class.constructors[0].rust_name, "new");
+    assert_eq!(class.constructors[0].jni_signature(), "(DD)J");
+    assert_eq!(class.methods.len(), 3);
+    assert_eq!(class.methods[0].rust_name, "dot");
+    assert!(!class.methods[0].is_mut);
+    assert_eq!(class.methods[0].jni_signature(), "(JJ)D");
+    assert_eq!(class.methods[1].rust_name, "magnitude");
+    assert!(!class.methods[1].is_mut);
+    assert_eq!(class.methods[1].jni_signature(), "(J)D");
+    assert_eq!(class.methods[2].rust_name, "scale");
+    assert!(class.methods[2].is_mut);
+    assert_eq!(class.methods[2].jni_signature(), "(JD)V");
+}
