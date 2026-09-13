@@ -1,0 +1,13 @@
+[package]
+name = "ketox-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Shared metadata and validation for Ketox Rust-to-Kotlin bindings"
+
+[dependencies]
+serde.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

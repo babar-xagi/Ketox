@@ -1,0 +1,15 @@
+[package]
+name = "ketox-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Command-line binding generation for Ketox Rust-to-Kotlin libraries"
+
+[[bin]]
+name = "ketox"
+path = "src/main.rs"
+
+[dependencies]
+ketox-core.workspace = true
+ketox-codegen.workspace = true
+serde_json.workspace = true

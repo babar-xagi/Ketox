@@ -1,0 +1,14 @@
+[package]
+name = "ketox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Safe, ergonomic Rust bindings for Kotlin"
+
+[dependencies]
+ketox-core.workspace = true
+ketox-macros.workspace = true
+ketox-jni.workspace = true
+
+[dev-dependencies]
+trybuild = "1"

@@ -1,0 +1,5 @@
+error: exports must be safe, synchronous, non-const Rust functions without generics, where clauses, an extern ABI, or variadic arguments
+ --> tests/ui/async.rs:4:5
+  |
+4 | pub async fn invalid(value: i32) -> i32 { value }
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

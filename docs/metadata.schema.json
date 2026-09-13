@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ketox module metadata version 1",
+  "description": "Structural schema. ketox-core additionally validates reserved names, derived Kotlin names, and function/parameter name uniqueness.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "package", "class_name", "library_name", "functions"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "package": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+    "class_name": { "$ref": "#/$defs/identifier" },
+    "library_name": { "$ref": "#/$defs/identifier" },
+    "functions": { "type": "array", "items": { "$ref": "#/$defs/function" } }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^(?!_+$)[A-Za-z_][A-Za-z0-9_]*$" },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "ty"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "ty": { "enum": ["bool", "i8", "i16", "i32", "i64", "f32", "f64", "string", "str"] }
+      }
+    },
+    "function": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rust_name", "kotlin_name", "parameters", "return_type"],
+      "properties": {
+        "rust_name": { "$ref": "#/$defs/identifier" },
+        "kotlin_name": { "$ref": "#/$defs/identifier" },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/parameter" } },
+        "return_type": { "enum": ["bool", "i8", "i16", "i32", "i64", "f32", "f64", "string", "unit"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "ketox-codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Deterministic Rust JNI and Kotlin binding generation for Ketox"
+
+[dependencies]
+ketox-core.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+syn.workspace = true

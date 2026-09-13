@@ -1,0 +1,6 @@
+/target/
+/.tools/
+/.idea/
+**/wip/
+*.log
+.DS_Store

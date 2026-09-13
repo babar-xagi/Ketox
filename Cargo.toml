@@ -1,0 +1,23 @@
+[workspace]
+members = ["crates/*", "examples/hello-world"]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+
+[workspace.dependencies]
+ketox = { path = "crates/ketox" }
+ketox-core = { path = "crates/ketox-core" }
+ketox-macros = { path = "crates/ketox-macros" }
+ketox-codegen = { path = "crates/ketox-codegen" }
+ketox-jni = { path = "crates/ketox-jni" }
+jni = "=0.21.1"
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+quote = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+panic = "unwind"

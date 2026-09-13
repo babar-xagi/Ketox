@@ -1,0 +1,5 @@
+error: unsupported export parameter type: use bool, i8/i16/i32/i64, f32/f64, String, or &str with an elided lifetime
+ --> tests/ui/unsupported.rs:4:23
+  |
+4 | pub fn invalid(value: Vec<i32>) -> i32 { value.len() as i32 }
+  |                       ^^^^^^^^

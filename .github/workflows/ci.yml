@@ -1,0 +1,66 @@
+name: Ketox CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Rust and JVM (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned Kotlin compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '2.2.0'
+          $archive = Join-Path $env:RUNNER_TEMP 'kotlin-compiler.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'ketox-kotlin'
+          Invoke-WebRequest -Uri "https://github.com/JetBrains/kotlin/releases/download/v$version/kotlin-compiler-$version.zip" -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force
+          if ($IsWindows) {
+            $compiler = Join-Path $destination 'kotlinc/bin/kotlinc.bat'
+          } else {
+            $compiler = Join-Path $destination 'kotlinc/bin/kotlinc'
+            chmod +x $compiler
+            if ($LASTEXITCODE -ne 0) { throw 'Could not make kotlinc executable.' }
+          }
+          "KETOX_KOTLINC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run Rust tests
+        run: cargo test --workspace --locked
+      - name: Run JVM integration checks (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-jvm.ps1
+      - name: Run JVM integration checks (Linux and macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/test-jvm.sh
+
+  msrv:
+    name: Rust 1.88 minimum version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: cargo check --workspace --all-targets --locked

@@ -1,0 +1,9 @@
+[package]
+name = "ketox-jni"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Panic containment and string conversion at Ketox JNI boundaries"
+
+[dependencies]
+jni.workspace = true

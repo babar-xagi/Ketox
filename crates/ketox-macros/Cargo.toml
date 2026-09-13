@@ -1,0 +1,15 @@
+[package]
+name = "ketox-macros"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Export validation and metadata for Ketox"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+ketox-core.workspace = true
+syn.workspace = true
+quote.workspace = true
+serde_json.workspace = true

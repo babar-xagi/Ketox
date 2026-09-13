@@ -1,0 +1,19 @@
+[package]
+name = "ketox-hello"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "ketox_hello"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ketox.workspace = true
+
+[build-dependencies]
+ketox-codegen.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
